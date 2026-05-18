@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Modal } from '@/components/ui/modal'
+import { TableWrapper, CardList, MobileCard } from '@/components/ui/table-mobile'
 import { toast } from 'sonner'
 import {
   Plus, Link2, CheckCircle, Trash2, AlertCircle,
@@ -63,7 +64,6 @@ export default function ConciliacaoPage() {
 
   useEffect(() => { load() }, [load])
 
-  // ── Parse CSV ─────────────────────────────────────────────
   const parseCSV = (file: File) => {
     setParsendo(true)
     Papa.parse(file, {
@@ -74,11 +74,8 @@ export default function ConciliacaoPage() {
         const itens: ExtratoImportado[] = []
 
         for (const row of rows) {
-          // Detecta colunas automaticamente (vários formatos de banco)
-          const keys = Object.keys(row).map(k => k.toLowerCase().trim())
-
           const descKey = Object.keys(row).find(k =>
-            ['descricao', 'historico', 'lancamento', 'descr', 'memo', 'description', 'historico'].includes(k.toLowerCase().trim())
+            ['descricao', 'historico', 'lancamento', 'descr', 'memo', 'description'].includes(k.toLowerCase().trim())
           )
           const valorKey = Object.keys(row).find(k =>
             ['valor', 'value', 'amount', 'credito', 'debito', 'vlr'].includes(k.toLowerCase().trim())
@@ -96,7 +93,6 @@ export default function ConciliacaoPage() {
 
           if (!descricao || isNaN(valor) || !dataRaw) continue
 
-          // Parse data (DD/MM/YYYY ou YYYY-MM-DD)
           let data = ''
           if (/^\d{2}\/\d{2}\/\d{4}$/.test(dataRaw)) {
             const [d, m, y] = dataRaw.split('/')
@@ -107,9 +103,7 @@ export default function ConciliacaoPage() {
             continue
           }
 
-          // Tipo: valor negativo = debito
           const tipo: 'credito' | 'debito' = parseFloat(valorStr) >= 0 ? 'credito' : 'debito'
-
           itens.push({ descricao, valor, data, tipo })
         }
 
@@ -128,7 +122,6 @@ export default function ConciliacaoPage() {
     })
   }
 
-  // ── Parse PDF (extrai texto e tenta identificar lancamentos) ──
   const parsePDF = async (file: File) => {
     setParsendo(true)
     try {
@@ -146,8 +139,6 @@ export default function ConciliacaoPage() {
         textoCompleto += linhas + '\n'
       }
 
-      // Regex para capturar linhas com data, descrição e valor
-      // Padrão: DD/MM/YYYY ... R$ X.XXX,XX ou X.XXX,XX
       const linhas = textoCompleto.split('\n')
       const itens: ExtratoImportado[] = []
 
@@ -162,7 +153,6 @@ export default function ConciliacaoPage() {
         const valorStr = matchValor[1].replace(/\./g, '').replace(',', '.')
         const valor = Math.abs(parseFloat(valorStr))
 
-        // Descrição: tudo entre a data e o valor
         const descricao = linha
           .replace(matchData[1], '')
           .replace(matchValor[1], '')
@@ -267,40 +257,41 @@ export default function ConciliacaoPage() {
   const conciliados = extratos.filter(e => e.conciliado)
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-4 md:space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Conciliacao Bancaria</h1>
-          <p className="text-sm text-slate-500 mt-1">Importe seu extrato e concilie com os lancamentos</p>
+          <h1 className="text-xl md:text-2xl font-bold text-slate-800">Conciliacao Bancaria</h1>
+          <p className="text-sm text-slate-500 mt-0.5">Importe seu extrato e concilie com os lancamentos</p>
         </div>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={load}><RefreshCw size={14} /></Button>
           <Button variant="secondary" onClick={() => setModalManual(true)}>
-            <Plus size={16} /> Manual
+            <Plus size={16} /> <span className="hidden sm:inline">Manual</span>
           </Button>
           <Button onClick={() => { setImportados([]); setModalImport(true) }}>
-            <Upload size={16} /> Importar Extrato
+            <Upload size={16} /> <span className="hidden sm:inline">Importar Extrato</span><span className="sm:hidden">Importar</span>
           </Button>
         </div>
       </div>
 
       {/* Resumo */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-3 gap-2 md:gap-4">
         <Card className="border-l-4 border-l-orange-400">
-          <CardContent className="py-4">
+          <CardContent className="py-3 md:py-4 px-3 md:px-6">
             <p className="text-xs text-slate-500">Pendentes</p>
             <p className="text-xl font-bold text-orange-600">{pendentes.length}</p>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-green-500">
-          <CardContent className="py-4">
+          <CardContent className="py-3 md:py-4 px-3 md:px-6">
             <p className="text-xs text-slate-500">Conciliados</p>
             <p className="text-xl font-bold text-green-600">{conciliados.length}</p>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-blue-500">
-          <CardContent className="py-4">
-            <p className="text-xs text-slate-500">Lancamentos sem conciliar</p>
+          <CardContent className="py-3 md:py-4 px-3 md:px-6">
+            <p className="text-xs text-slate-500">Sem conciliar</p>
             <p className="text-xl font-bold text-blue-600">{lancamentos.length}</p>
           </CardContent>
         </Card>
@@ -314,7 +305,9 @@ export default function ConciliacaoPage() {
             <CardTitle>Pendentes de Conciliacao</CardTitle>
           </div>
         </CardHeader>
-        <div className="overflow-x-auto">
+
+        {/* Desktop */}
+        <TableWrapper>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100">
@@ -368,7 +361,54 @@ export default function ConciliacaoPage() {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableWrapper>
+
+        {/* Mobile */}
+        <CardList>
+          {loading ? (
+            <MobileCard><p className="text-center text-slate-400 py-6">Carregando...</p></MobileCard>
+          ) : pendentes.length === 0 ? (
+            <MobileCard>
+              <div className="text-center py-6">
+                <CheckCircle className="w-8 h-8 text-green-400 mx-auto mb-2" />
+                <p className="text-slate-400 text-sm">Tudo conciliado!</p>
+              </div>
+            </MobileCard>
+          ) : pendentes.map(e => (
+            <MobileCard key={e.id}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-slate-800 text-sm truncate">{e.descricao}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{formatDate(e.data)}</p>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <p className={`text-sm font-bold ${e.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
+                    {formatCurrency(Number(e.valor))}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-between mt-2">
+                <Badge variant={e.tipo === 'credito' ? 'success' : 'danger'}>
+                  {e.tipo === 'credito' ? 'Credito' : 'Debito'}
+                </Badge>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => { setModalConciliar(e); setLancamentoSelecionado('') }}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-600 text-xs font-medium"
+                  >
+                    <Link2 size={12} /> Conciliar
+                  </button>
+                  <button
+                    onClick={() => excluir(e.id)}
+                    className="p-1.5 rounded-lg hover:bg-red-50 text-red-400"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+            </MobileCard>
+          ))}
+        </CardList>
       </Card>
 
       {/* Conciliados */}
@@ -380,7 +420,9 @@ export default function ConciliacaoPage() {
               <CardTitle>Conciliados</CardTitle>
             </div>
           </CardHeader>
-          <div className="overflow-x-auto">
+
+          {/* Desktop */}
+          <TableWrapper>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100">
@@ -411,17 +453,41 @@ export default function ConciliacaoPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableWrapper>
+
+          {/* Mobile */}
+          <CardList>
+            {conciliados.map(e => (
+              <MobileCard key={e.id}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-slate-700 text-sm truncate">{e.descricao}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">{formatDate(e.data)}</p>
+                    {(e as any).lancamentos?.descricao && (
+                      <p className="text-xs text-indigo-500 mt-0.5">Vinculado: {(e as any).lancamentos.descricao}</p>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                    <p className={`text-sm font-bold ${e.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
+                      {formatCurrency(Number(e.valor))}
+                    </p>
+                    <Badge variant={e.tipo === 'credito' ? 'success' : 'danger'}>
+                      {e.tipo === 'credito' ? 'Credito' : 'Debito'}
+                    </Badge>
+                  </div>
+                </div>
+              </MobileCard>
+            ))}
+          </CardList>
         </Card>
       )}
 
       {/* Modal Importar */}
       <Modal open={modalImport} onClose={() => setModalImport(false)} title="Importar Extrato Bancario" size="lg">
         <div className="space-y-4">
-          {/* Upload area */}
           <div
             onClick={() => fileRef.current?.click()}
-            className="border-2 border-dashed border-indigo-200 rounded-2xl p-8 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/50 transition-all"
+            className="border-2 border-dashed border-indigo-200 rounded-2xl p-6 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/50 transition-all"
           >
             <input ref={fileRef} type="file" accept=".csv,.pdf,.txt" className="hidden" onChange={handleFile} />
             <Upload className="w-10 h-10 text-indigo-400 mx-auto mb-3" />
@@ -444,20 +510,18 @@ export default function ConciliacaoPage() {
             </div>
           )}
 
-          {/* Preview */}
           {importados.length > 0 && (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <p className="text-sm font-semibold text-slate-700">{importados.length} lancamentos encontrados</p>
                 <button onClick={() => setImportados([])} className="text-xs text-slate-400 hover:text-red-500 transition-colors">Limpar</button>
               </div>
-              <div className="border border-slate-200 rounded-xl overflow-hidden max-h-64 overflow-y-auto scrollbar-thin">
+              <div className="border border-slate-200 rounded-xl overflow-hidden max-h-56 overflow-y-auto">
                 <table className="w-full text-xs">
                   <thead className="bg-slate-50 sticky top-0">
                     <tr>
                       <th className="text-left px-3 py-2 font-semibold text-slate-500">Descricao</th>
                       <th className="text-left px-3 py-2 font-semibold text-slate-500">Data</th>
-                      <th className="text-left px-3 py-2 font-semibold text-slate-500">Tipo</th>
                       <th className="text-right px-3 py-2 font-semibold text-slate-500">Valor</th>
                       <th className="px-2 py-2" />
                     </tr>
@@ -465,14 +529,9 @@ export default function ConciliacaoPage() {
                   <tbody className="divide-y divide-slate-50">
                     {importados.map((item, idx) => (
                       <tr key={idx} className="hover:bg-slate-50">
-                        <td className="px-3 py-2 text-slate-700 max-w-48 truncate">{item.descricao}</td>
-                        <td className="px-3 py-2 text-slate-500">{formatDate(item.data)}</td>
-                        <td className="px-3 py-2">
-                          <span className={`font-medium ${item.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
-                            {item.tipo === 'credito' ? 'Cred.' : 'Deb.'}
-                          </span>
-                        </td>
-                        <td className={`px-3 py-2 text-right font-semibold ${item.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
+                        <td className="px-3 py-2 text-slate-700 max-w-36 truncate">{item.descricao}</td>
+                        <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{formatDate(item.data)}</td>
+                        <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${item.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
                           {formatCurrency(item.valor)}
                         </td>
                         <td className="px-2 py-2">
@@ -489,7 +548,7 @@ export default function ConciliacaoPage() {
               <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-slate-100">
                 <Button variant="secondary" onClick={() => setModalImport(false)}>Cancelar</Button>
                 <Button onClick={salvarImportados} disabled={salvandoImport}>
-                  {salvandoImport ? 'Salvando...' : `Importar ${importados.length} lancamentos`}
+                  {salvandoImport ? 'Salvando...' : `Importar ${importados.length}`}
                 </Button>
               </div>
             </div>
@@ -547,7 +606,7 @@ export default function ConciliacaoPage() {
                 <option value="">Selecione um lancamento...</option>
                 {lancamentos.map(l => (
                   <option key={l.id} value={l.id}>
-                    {formatDate(l.data)} &middot; {l.descricao} &middot; {formatCurrency(Number(l.valor))} ({l.tipo})
+                    {formatDate(l.data)} &middot; {l.descricao} &middot; {formatCurrency(Number(l.valor))}
                   </option>
                 ))}
               </select>
@@ -555,7 +614,7 @@ export default function ConciliacaoPage() {
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setModalConciliar(null)}>Cancelar</Button>
               <Button onClick={conciliar} disabled={saving || !lancamentoSelecionado}>
-                <Link2 size={14} /> Confirmar Conciliacao
+                <Link2 size={14} /> Confirmar
               </Button>
             </div>
           </div>

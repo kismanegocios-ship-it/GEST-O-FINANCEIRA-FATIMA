@@ -104,14 +104,14 @@ export default function RelatoriosPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Relatorios</h1>
-          <p className="text-sm text-slate-500 mt-1">Fechamento mensal e analise financeira</p>
+          <h1 className="text-xl md:text-2xl font-bold text-slate-800">Relatorios</h1>
+          <p className="text-sm text-slate-500 mt-0.5">Fechamento mensal e analise financeira</p>
         </div>
         <input
           type="month"
-          className="px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+          className="px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 self-start sm:self-auto"
           value={mesSelecionado}
           onChange={e => setMesSelecionado(e.target.value)}
         />
@@ -274,7 +274,7 @@ export default function RelatoriosPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-8">
             <div>
               <h4 className="font-semibold text-green-700 mb-3 text-sm uppercase">Entradas</h4>
               <div className="space-y-1">
