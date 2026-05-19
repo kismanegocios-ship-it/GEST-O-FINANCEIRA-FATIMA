@@ -10,6 +10,7 @@ import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Modal } from '@/components/ui/modal'
 import { TableWrapper, CardList, MobileCard } from '@/components/ui/table-mobile'
+import { CurrencyInput } from '@/components/ui/currency-input'
 import { toast } from 'sonner'
 import { Plus, Search, Trash2, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react'
 import type { Lancamento, CentroCusto, Categoria } from '@/lib/types'
@@ -318,7 +319,7 @@ export default function LancamentosPage() {
 
           <Input label="Descricao *" placeholder="Ex: Venda do dia, Pagamento fornecedor..." value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))} />
           <div className="grid grid-cols-2 gap-4">
-            <Input label="Valor *" type="number" step="0.01" placeholder="0,00" value={form.valor} onChange={e => setForm(f => ({ ...f, valor: e.target.value }))} />
+            <CurrencyInput label="Valor *" value={form.valor} onChange={e => setForm(f => ({ ...f, valor: e.target.value }))} />
             <Input label="Data *" type="date" value={form.data} onChange={e => setForm(f => ({ ...f, data: e.target.value }))} />
           </div>
           <div className="grid grid-cols-2 gap-4">

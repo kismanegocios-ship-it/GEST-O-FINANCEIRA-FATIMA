@@ -10,6 +10,7 @@ import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Modal } from '@/components/ui/modal'
 import { TableWrapper, CardList, MobileCard } from '@/components/ui/table-mobile'
+import { CurrencyInput } from '@/components/ui/currency-input'
 import { toast } from 'sonner'
 import {
   Plus, Search, Calendar, CheckCircle, XCircle, Trash2,
@@ -268,7 +269,7 @@ export default function DespesasPage() {
           <div className="col-span-1 sm:col-span-2">
             <Input label="Descricao *" placeholder="Ex: Conta de luz, Aluguel..." value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))} />
           </div>
-          <Input label="Valor *" type="number" step="0.01" placeholder="0,00" value={form.valor} onChange={e => setForm(f => ({ ...f, valor: e.target.value }))} />
+          <CurrencyInput label="Valor *" value={form.valor} onChange={e => setForm(f => ({ ...f, valor: e.target.value }))} />
           <Input label="Vencimento *" type="date" value={form.data_vencimento} onChange={e => setForm(f => ({ ...f, data_vencimento: e.target.value }))} />
           <Select label="Status" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
             <option value="pendente">Pendente</option>

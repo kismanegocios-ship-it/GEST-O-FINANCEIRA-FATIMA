@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Modal } from '@/components/ui/modal'
 import { TableWrapper, CardList, MobileCard } from '@/components/ui/table-mobile'
+import { CurrencyInput } from '@/components/ui/currency-input'
 import { toast } from 'sonner'
 import {
   Plus, Link2, CheckCircle, Trash2, AlertCircle,
@@ -577,7 +578,7 @@ export default function ConciliacaoPage() {
           </div>
           <Input label="Descricao *" placeholder="Descricao do extrato..." value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))} />
           <div className="grid grid-cols-2 gap-3">
-            <Input label="Valor *" type="number" step="0.01" value={form.valor} onChange={e => setForm(f => ({ ...f, valor: e.target.value }))} />
+            <CurrencyInput label="Valor *" value={form.valor} onChange={e => setForm(f => ({ ...f, valor: e.target.value }))} />
             <Input label="Data *" type="date" value={form.data} onChange={e => setForm(f => ({ ...f, data: e.target.value }))} />
           </div>
         </div>
