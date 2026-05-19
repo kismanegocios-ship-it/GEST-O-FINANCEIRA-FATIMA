@@ -6,9 +6,11 @@ function formatCurrencySimple(v: number) {
 }
 
 export async function GET() {
+  // Usa service_role para bypassar RLS (endpoint server-side, seguro)
+  // Fallback para anon se service_role nao estiver configurado
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   )
 
   const hoje = new Date()
