@@ -17,7 +17,7 @@ import {
   Pencil, Filter, RefreshCw, DollarSign, ChevronRight
 } from 'lucide-react'
 import type { Despesa, CentroCusto, Categoria } from '@/lib/types'
-import { format } from 'date-fns'
+import { format, addMonths } from 'date-fns'
 
 const STATUS_OPTIONS = ['todos', 'pendente', 'pago', 'vencido', 'cancelado']
 
@@ -28,11 +28,13 @@ const statusVariant: Record<string, 'warning' | 'success' | 'danger' | 'neutral'
 interface FormData {
   descricao: string; valor: string; data_vencimento: string; status: string
   centro_custo_id: string; categoria_id: string; recorrente: boolean; frequencia: string; observacoes: string
+  parcelado: boolean; num_parcelas: string
 }
 
 const emptyForm: FormData = {
   descricao: '', valor: '', data_vencimento: '', status: 'pendente',
   centro_custo_id: '', categoria_id: '', recorrente: false, frequencia: 'mensal', observacoes: '',
+  parcelado: false, num_parcelas: '2',
 }
 
 export default function DespesasPage() {
@@ -71,6 +73,7 @@ export default function DespesasPage() {
       descricao: d.descricao, valor: String(d.valor), data_vencimento: d.data_vencimento,
       status: d.status, centro_custo_id: d.centro_custo_id ?? '', categoria_id: d.categoria_id ?? '',
       recorrente: d.recorrente, frequencia: d.frequencia ?? 'mensal', observacoes: d.observacoes ?? '',
+      parcelado: false, num_parcelas: '2',
     })
     setModalOpen(true)
   }
@@ -78,6 +81,31 @@ export default function DespesasPage() {
   const salvar = async () => {
     if (!form.descricao || !form.valor || !form.data_vencimento) { toast.error('Preencha os campos obrigatorios'); return }
     setSaving(true)
+
+    // ── Modo parcelas: cria N despesas mensais ──
+    if (form.parcelado && !editando) {
+      const n = Math.max(2, Math.min(120, parseInt(form.num_parcelas) || 2))
+      const baseDate = new Date(form.data_vencimento + 'T12:00:00')
+      const registros = Array.from({ length: n }, (_, i) => ({
+        descricao: `${form.descricao} (${i + 1}/${n})`,
+        valor: parseFloat(form.valor),
+        data_vencimento: format(addMonths(baseDate, i), 'yyyy-MM-dd'),
+        status: 'pendente',
+        centro_custo_id: form.centro_custo_id || null,
+        categoria_id: form.categoria_id || null,
+        recorrente: false,
+        frequencia: null,
+        observacoes: form.observacoes || null,
+      }))
+      const { error } = await supabase.from('despesas').insert(registros)
+      setSaving(false)
+      if (error) { toast.error('Erro ao criar parcelas'); return }
+      toast.success(`${n} parcelas criadas! (${form.descricao} 1/${n} até ${n}/${n})`)
+      setModalOpen(false); setForm(emptyForm); load()
+      return
+    }
+
+    // ── Modo normal: cria/edita 1 despesa ──
     const payload = {
       descricao: form.descricao, valor: parseFloat(form.valor), data_vencimento: form.data_vencimento,
       status: form.status, centro_custo_id: form.centro_custo_id || null, categoria_id: form.categoria_id || null,
@@ -329,20 +357,93 @@ export default function DespesasPage() {
               {categorias.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
             </Select>
           </div>
-          <div className="col-span-1 sm:col-span-2 flex items-center gap-3">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={form.recorrente} onChange={e => setForm(f => ({ ...f, recorrente: e.target.checked }))} className="w-4 h-4 rounded accent-indigo-600" />
-              <span className="text-sm text-slate-600">Recorrente</span>
-            </label>
-            {form.recorrente && (
-              <Select value={form.frequencia} onChange={e => setForm(f => ({ ...f, frequencia: e.target.value }))} className="w-36">
-                <option value="mensal">Mensal</option>
-                <option value="quinzenal">Quinzenal</option>
-                <option value="semanal">Semanal</option>
-                <option value="anual">Anual</option>
-              </Select>
-            )}
-          </div>
+          {/* Parcelado / Recorrente — mutuamente exclusivos */}
+          {!editando && (
+            <div className="col-span-1 sm:col-span-2 space-y-3">
+              {/* Toggle Parcelado */}
+              <div className={`rounded-2xl border-2 p-3 transition-all cursor-pointer ${form.parcelado ? 'border-indigo-400 bg-indigo-50' : 'border-slate-100 bg-slate-50'}`}
+                onClick={() => setForm(f => ({ ...f, parcelado: !f.parcelado, recorrente: false }))}>
+                <div className="flex items-center gap-3">
+                  <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${form.parcelado ? 'bg-indigo-600 border-indigo-600' : 'border-slate-300'}`}>
+                    {form.parcelado && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-700">Parcelado</p>
+                    <p className="text-xs text-slate-400">Cria uma entrada para cada parcela automaticamente</p>
+                  </div>
+                </div>
+                {form.parcelado && (
+                  <div className="mt-3 flex items-center gap-3" onClick={e => e.stopPropagation()}>
+                    <div className="flex-1">
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Numero de parcelas</label>
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={() => setForm(f => ({ ...f, num_parcelas: String(Math.max(2, parseInt(f.num_parcelas) - 1)) }))}
+                          className="w-8 h-8 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold flex items-center justify-center hover:bg-slate-100">−</button>
+                        <input type="number" min={2} max={120}
+                          className="w-16 text-center px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                          value={form.num_parcelas}
+                          onChange={e => setForm(f => ({ ...f, num_parcelas: e.target.value }))} />
+                        <button type="button" onClick={() => setForm(f => ({ ...f, num_parcelas: String(Math.min(120, parseInt(f.num_parcelas) + 1)) }))}
+                          className="w-8 h-8 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold flex items-center justify-center hover:bg-slate-100">+</button>
+                        <span className="text-xs text-slate-500">parcelas mensais</span>
+                      </div>
+                    </div>
+                    <div className="bg-white border border-indigo-100 rounded-xl px-3 py-2 text-center">
+                      <p className="text-xs text-slate-400">Valor por parcela</p>
+                      <p className="text-sm font-bold text-indigo-600">
+                        {form.valor ? formatCurrency(parseFloat(form.valor)) : 'R$ —'}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Total: {form.valor ? formatCurrency(parseFloat(form.valor) * (parseInt(form.num_parcelas) || 0)) : '—'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Toggle Recorrente */}
+              <div className={`rounded-2xl border-2 p-3 transition-all cursor-pointer ${form.recorrente ? 'border-purple-400 bg-purple-50' : 'border-slate-100 bg-slate-50'}`}
+                onClick={() => setForm(f => ({ ...f, recorrente: !f.recorrente, parcelado: false }))}>
+                <div className="flex items-center gap-3">
+                  <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${form.recorrente ? 'bg-purple-600 border-purple-600' : 'border-slate-300'}`}>
+                    {form.recorrente && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-700">Recorrente</p>
+                    <p className="text-xs text-slate-400">Despesa fixa mensal, quinzenal ou anual — cancele quando quiser</p>
+                  </div>
+                </div>
+                {form.recorrente && (
+                  <div className="mt-3" onClick={e => e.stopPropagation()}>
+                    <Select value={form.frequencia} onChange={e => setForm(f => ({ ...f, frequencia: e.target.value }))} className="w-44">
+                      <option value="mensal">Mensal</option>
+                      <option value="quinzenal">Quinzenal</option>
+                      <option value="semanal">Semanal</option>
+                      <option value="anual">Anual</option>
+                    </Select>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Ao editar, mantém o toggle recorrente simples */}
+          {editando && (
+            <div className="col-span-1 sm:col-span-2 flex items-center gap-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={form.recorrente} onChange={e => setForm(f => ({ ...f, recorrente: e.target.checked }))} className="w-4 h-4 rounded accent-indigo-600" />
+                <span className="text-sm text-slate-600">Recorrente</span>
+              </label>
+              {form.recorrente && (
+                <Select value={form.frequencia} onChange={e => setForm(f => ({ ...f, frequencia: e.target.value }))} className="w-36">
+                  <option value="mensal">Mensal</option>
+                  <option value="quinzenal">Quinzenal</option>
+                  <option value="semanal">Semanal</option>
+                  <option value="anual">Anual</option>
+                </Select>
+              )}
+            </div>
+          )}
           <div className="col-span-1 sm:col-span-2">
             <label className="block text-xs font-medium text-slate-600 mb-1.5">Observacoes</label>
             <textarea className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/30" rows={2} value={form.observacoes} onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))} />
@@ -350,7 +451,9 @@ export default function DespesasPage() {
         </div>
         <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-slate-100">
           <Button variant="secondary" onClick={() => setModalOpen(false)}>Cancelar</Button>
-          <Button onClick={salvar} disabled={saving}>{saving ? 'Salvando...' : editando ? 'Salvar' : 'Cadastrar'}</Button>
+          <Button onClick={salvar} disabled={saving}>
+            {saving ? 'Salvando...' : editando ? 'Salvar alteracoes' : form.parcelado ? `Criar ${form.num_parcelas || '?'} parcelas` : 'Cadastrar Despesa'}
+          </Button>
         </div>
       </Modal>
 
