@@ -73,6 +73,15 @@ export default function CalendarioPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
+
+    // Auto-vencimento: pendentes com data anterior a hoje → vencido
+    const hoje = format(new Date(), 'yyyy-MM-dd')
+    await supabase
+      .from('despesas')
+      .update({ status: 'vencido' })
+      .eq('status', 'pendente')
+      .lt('data_vencimento', hoje)
+
     const ini = format(startOfMonth(mes), 'yyyy-MM-dd')
     const fim = format(endOfMonth(mes), 'yyyy-MM-dd')
     const { data } = await supabase

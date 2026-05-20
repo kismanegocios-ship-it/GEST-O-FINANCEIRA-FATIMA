@@ -39,8 +39,16 @@ export default function Dashboard() {
   useEffect(() => {
     async function load() {
       const hoje = new Date()
+      const hojeStr = format(hoje, 'yyyy-MM-dd')
       const inicioMes = format(startOfMonth(hoje), 'yyyy-MM-dd')
       const fimMes = format(endOfMonth(hoje), 'yyyy-MM-dd')
+
+      // Auto-vencimento: pendentes com data anterior a hoje → vencido
+      await supabase
+        .from('despesas')
+        .update({ status: 'vencido' })
+        .eq('status', 'pendente')
+        .lt('data_vencimento', hojeStr)
 
       const [lanc, desp, lancRecentes, despVencendo] = await Promise.all([
         supabase.from('lancamentos').select('*').gte('data', inicioMes).lte('data', fimMes),

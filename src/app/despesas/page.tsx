@@ -53,6 +53,15 @@ export default function DespesasPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
+
+    // Auto-vencimento: pendentes com data anterior a hoje → vencido
+    const hoje = format(new Date(), 'yyyy-MM-dd')
+    await supabase
+      .from('despesas')
+      .update({ status: 'vencido' })
+      .eq('status', 'pendente')
+      .lt('data_vencimento', hoje)
+
     const [d, cc, cat] = await Promise.all([
       supabase.from('despesas').select('*, centros_custo(*), categorias(*)').order('data_vencimento'),
       supabase.from('centros_custo').select('*').eq('ativo', true).order('nome'),
