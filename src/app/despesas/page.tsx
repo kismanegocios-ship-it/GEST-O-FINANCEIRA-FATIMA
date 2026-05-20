@@ -224,42 +224,84 @@ export default function DespesasPage() {
         {/* Mobile: cards */}
         <CardList>
           {loading ? (
-            <MobileCard><p className="text-center text-slate-400 py-4">Carregando...</p></MobileCard>
+            <MobileCard><p className="text-center text-slate-400 py-6">Carregando...</p></MobileCard>
           ) : filtradas.length === 0 ? (
-            <MobileCard><p className="text-center text-slate-400 py-4">Nenhuma despesa</p></MobileCard>
-          ) : filtradas.map(d => (
-            <MobileCard key={d.id}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-semibold text-slate-800 text-sm">{d.descricao}</p>
-                    <Badge variant={statusVariant[d.status]}>{getStatusLabel(d.status)}</Badge>
+            <MobileCard><p className="text-center text-slate-400 py-6">Nenhuma despesa encontrada</p></MobileCard>
+          ) : filtradas.map(d => {
+            const cc = (d as any).centros_custo?.nome
+            const isVencido = d.status === 'vencido'
+            const isPendente = d.status === 'pendente'
+            return (
+              <MobileCard key={d.id} className="py-4">
+                {/* Linha 1: descrição + badge status */}
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-slate-800 text-sm leading-tight">{d.descricao}</p>
+                    {d.recorrente && (
+                      <span className="text-[10px] text-indigo-500 font-medium">↻ Recorrente · {d.frequencia}</span>
+                    )}
                   </div>
-                  <p className="text-xs text-slate-400 mt-0.5">{formatDate(d.data_vencimento)} {(d as any).centros_custo ? `· ${(d as any).centros_custo.nome}` : ''}</p>
-                  <p className="text-lg font-bold text-slate-800 mt-1">{formatCurrency(Number(d.valor))}</p>
+                  <Badge variant={statusVariant[d.status]}>{getStatusLabel(d.status)}</Badge>
                 </div>
-                <div className="flex flex-col gap-1">
-                  {d.status === 'pendente' && (
-                    <button onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')) }}
-                      className="flex items-center gap-1 px-2.5 py-1.5 bg-green-100 text-green-700 rounded-xl text-xs font-semibold">
-                      <CheckCircle size={12} /> Pagar
+
+                {/* Linha 2: valor em destaque + vencimento */}
+                <div className="flex items-center justify-between mb-2">
+                  <p className={`text-xl font-bold ${isVencido ? 'text-red-600' : isPendente ? 'text-slate-800' : 'text-green-600'}`}>
+                    {formatCurrency(Number(d.valor))}
+                  </p>
+                  <div className="text-right">
+                    <p className="text-xs text-slate-500 font-medium">Vencimento</p>
+                    <p className={`text-xs font-semibold ${isVencido ? 'text-red-500' : 'text-slate-700'}`}>
+                      {formatDate(d.data_vencimento)}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Linha 3: centro de custo (chip) */}
+                {cc && (
+                  <div className="mb-2">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-lg text-[11px] font-medium">
+                      🏢 {cc}
+                    </span>
+                  </div>
+                )}
+
+                {/* Linha 4: ações */}
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-50">
+                  {isPendente && (
+                    <button
+                      onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')) }}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-green-100 text-green-700 rounded-xl text-xs font-semibold hover:bg-green-200 transition-colors"
+                    >
+                      <CheckCircle size={13} /> Marcar Pago
                     </button>
                   )}
-                  <button onClick={() => abrirEditar(d)} className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 text-slate-600 rounded-xl text-xs font-semibold">
-                    <Pencil size={12} /> Editar
+                  <button
+                    onClick={() => abrirEditar(d)}
+                    className="flex items-center justify-center gap-1.5 px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-200 transition-colors"
+                  >
+                    <Pencil size={13} /> Editar
+                  </button>
+                  {isPendente && (
+                    <a
+                      href={googleCalendarLink({ title: `Pagar: ${d.descricao}`, date: d.data_vencimento, description: `Valor: ${formatCurrency(Number(d.valor))}` })}
+                      target="_blank" rel="noopener noreferrer"
+                      className="flex items-center justify-center p-2 bg-indigo-50 text-indigo-500 rounded-xl hover:bg-indigo-100 transition-colors"
+                      title="Google Agenda"
+                    >
+                      <Calendar size={14} />
+                    </a>
+                  )}
+                  <button
+                    onClick={() => excluir(d.id)}
+                    className="flex items-center justify-center p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 transition-colors"
+                  >
+                    <Trash2 size={14} />
                   </button>
                 </div>
-              </div>
-              {d.status === 'pendente' && (
-                <div className="mt-2 pt-2 border-t border-slate-50 flex gap-2">
-                  <a href={googleCalendarLink({ title: `Pagar: ${d.descricao}`, date: d.data_vencimento, description: `Valor: ${formatCurrency(Number(d.valor))}` })} target="_blank" rel="noopener noreferrer"
-                    className="flex items-center gap-1 text-xs text-indigo-500 font-medium">
-                    <Calendar size={11} /> Adicionar ao Google Agenda
-                  </a>
-                </div>
-              )}
-            </MobileCard>
-          ))}
+              </MobileCard>
+            )
+          })}
         </CardList>
       </Card>
 

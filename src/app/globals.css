@@ -26,6 +26,29 @@ body {
   border-radius: 4px;
 }
 
+/* ── Estilos de Impressão (PDF) ──────────────────────── */
+@media print {
+  /* Esconde navegação, sidebar, botões */
+  aside, nav, header,
+  .print\:hidden { display: none !important; }
+
+  /* Remove margens do layout */
+  body { background: white !important; }
+  main { margin-left: 0 !important; padding-bottom: 0 !important; }
+
+  /* Garante que os cards apareçam sem sombra */
+  .shadow-sm, .shadow-md, .shadow-lg { box-shadow: none !important; }
+
+  /* Quebra de página entre seções grandes */
+  .page-break { page-break-before: always; }
+
+  /* Fonte menor para caber mais conteúdo */
+  body { font-size: 12px !important; }
+
+  /* Mostra todo o conteúdo sem overflow */
+  * { overflow: visible !important; }
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }

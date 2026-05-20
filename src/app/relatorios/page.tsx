@@ -10,6 +10,7 @@ import {
 } from 'recharts'
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
+import { Download } from 'lucide-react'
 
 const COLORS = ['#6366f1', '#f472b6', '#22c55e', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#14b8a6']
 
@@ -102,6 +103,10 @@ export default function RelatoriosPage() {
 
   useEffect(() => { load() }, [load])
 
+  const baixarPDF = () => {
+    window.print()
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -109,12 +114,20 @@ export default function RelatoriosPage() {
           <h1 className="text-xl md:text-2xl font-bold text-slate-800">Relatorios</h1>
           <p className="text-sm text-slate-500 mt-0.5">Fechamento mensal e analise financeira</p>
         </div>
-        <input
-          type="month"
-          className="px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 self-start sm:self-auto"
-          value={mesSelecionado}
-          onChange={e => setMesSelecionado(e.target.value)}
-        />
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <input
+            type="month"
+            className="px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+            value={mesSelecionado}
+            onChange={e => setMesSelecionado(e.target.value)}
+          />
+          <button
+            onClick={baixarPDF}
+            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-colors shadow-sm print:hidden"
+          >
+            <Download size={15} /> Baixar PDF
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

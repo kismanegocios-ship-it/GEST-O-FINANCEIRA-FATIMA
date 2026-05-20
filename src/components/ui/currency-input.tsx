@@ -1,6 +1,7 @@
 'use client'
 
 import { cn } from '@/lib/utils'
+import { useState, useEffect } from 'react'
 
 interface CurrencyInputProps {
   label?: string
@@ -11,10 +12,27 @@ interface CurrencyInputProps {
   error?: string
 }
 
+function formatBRL(raw: string): string {
+  const num = parseFloat(raw)
+  if (!raw || isNaN(num)) return ''
+  return num.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function parseBRL(display: string): string {
+  // Remove pontos (separador de milhar), troca vírgula por ponto decimal
+  const cleaned = display
+    .replace(/\./g, '')
+    .replace(',', '.')
+    .replace(/[^\d.]/g, '')
+  const num = parseFloat(cleaned)
+  return isNaN(num) ? '' : String(num)
+}
+
 /**
- * Input de valor monetário em Real (R$).
- * Exibe formatado (ex: 10.000,50) e retorna o valor numérico bruto (ex: "10000.5")
- * compatível com a interface do Input padrão (onChange com e.target.value).
+ * Input monetário em R$.
+ * O usuário digita livremente (ex: 10000 ou 10.000,00).
+ * Ao sair do campo (blur), formata automaticamente para "10.000,00".
+ * O onChange retorna o valor numérico bruto (ex: "10000").
  */
 export function CurrencyInput({
   label,
@@ -24,26 +42,33 @@ export function CurrencyInput({
   placeholder = '0,00',
   error,
 }: CurrencyInputProps) {
-  // Formata número bruto para exibição: 10000.5 → "10.000,50"
-  const toDisplay = (raw: string) => {
-    const num = parseFloat(raw)
-    if (!raw || isNaN(num)) return ''
-    return num.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const [display, setDisplay] = useState(() => formatBRL(value))
+  const [focused, setFocused] = useState(false)
+
+  // Sincroniza quando valor externo muda (ex: reset do formulário)
+  useEffect(() => {
+    if (!focused) {
+      setDisplay(formatBRL(value))
+    }
+  }, [value, focused])
+
+  const handleFocus = () => {
+    setFocused(true)
   }
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Remove R$, pontos e espaços; troca vírgula por ponto
-    const raw = e.target.value
-      .replace(/R\$\s?/g, '')
-      .replace(/\./g, '')
-      .replace(',', '.')
-      .replace(/[^\d.]/g, '')
+    // Deixa o usuário digitar livremente
+    setDisplay(e.target.value)
+  }
 
-    // Garante no máximo 2 casas decimais
-    const match = raw.match(/^\d*\.?\d{0,2}$/)
-    if (raw === '' || raw === '.') {
+  const handleBlur = () => {
+    setFocused(false)
+    const raw = parseBRL(display)
+    if (!raw) {
+      setDisplay('')
       onChange({ target: { value: '' } })
-    } else if (match) {
+    } else {
+      setDisplay(formatBRL(raw))
       onChange({ target: { value: raw } })
     }
   }
@@ -60,8 +85,10 @@ export function CurrencyInput({
         <input
           type="text"
           inputMode="decimal"
-          value={toDisplay(value)}
+          value={display}
           onChange={handleChange}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
           placeholder={placeholder}
           className={cn(
             'w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 placeholder:text-slate-400',
