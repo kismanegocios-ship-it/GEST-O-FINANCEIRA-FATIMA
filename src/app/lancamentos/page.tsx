@@ -71,10 +71,9 @@ export default function LancamentosPage() {
   }
 
   const salvar = async () => {
-    if (!form.descricao || !form.valor || !form.data) {
-      toast.error('Preencha os campos obrigatorios')
-      return
-    }
+    if (!form.descricao) { toast.error('Informe a descricao'); return }
+    if (!form.valor || parseFloat(form.valor) <= 0) { toast.error('Informe um valor maior que zero'); return }
+    if (!form.data) { toast.error('Informe a data'); return }
     setSaving(true)
     const { error } = await supabase.from('lancamentos').insert({
       descricao: form.descricao,
@@ -88,8 +87,8 @@ export default function LancamentosPage() {
       observacoes: form.observacoes || null,
     })
     setSaving(false)
-    if (error) { toast.error('Erro ao salvar'); return }
-    toast.success('Lancamento registrado!')
+    if (error) { toast.error(`Erro ao salvar: ${error.message}`); return }
+    toast.success(form.tipo === 'entrada' ? '✅ Entrada registrada no caixa!' : '✅ Saida registrada no caixa!')
     setModalOpen(false)
     load()
   }

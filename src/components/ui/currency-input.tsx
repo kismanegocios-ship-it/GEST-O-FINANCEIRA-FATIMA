@@ -19,20 +19,26 @@ function formatBRL(raw: string): string {
 }
 
 function parseBRL(display: string): string {
-  // Remove pontos (separador de milhar), troca vírgula por ponto decimal
+  // Remove pontos (milhar), troca vírgula por ponto decimal, remove resto
   const cleaned = display
     .replace(/\./g, '')
     .replace(',', '.')
     .replace(/[^\d.]/g, '')
-  const num = parseFloat(cleaned)
+  // Garante apenas um ponto decimal
+  const parts = cleaned.split('.')
+  const normalized = parts.length > 2
+    ? parts[0] + '.' + parts.slice(1).join('')
+    : cleaned
+  const num = parseFloat(normalized)
   return isNaN(num) ? '' : String(num)
 }
 
 /**
- * Input monetário em R$.
- * O usuário digita livremente (ex: 10000 ou 10.000,00).
- * Ao sair do campo (blur), formata automaticamente para "10.000,00".
- * O onChange retorna o valor numérico bruto (ex: "10000").
+ * Input monetário R$.
+ * - Digita livremente (ex: 10000 ou 10.000,00 ou 1500,50)
+ * - Ao sair do campo (blur) formata para "10.000,00"
+ * - onChange é chamado a CADA tecla para garantir que o formulário
+ *   sempre tenha o valor atualizado mesmo ao clicar direto em Salvar
  */
 export function CurrencyInput({
   label,
@@ -45,24 +51,26 @@ export function CurrencyInput({
   const [display, setDisplay] = useState(() => formatBRL(value))
   const [focused, setFocused] = useState(false)
 
-  // Sincroniza quando valor externo muda (ex: reset do formulário)
+  // Sincroniza display quando valor externo muda (ex: reset do formulário)
   useEffect(() => {
     if (!focused) {
       setDisplay(formatBRL(value))
     }
   }, [value, focused])
 
-  const handleFocus = () => {
-    setFocused(true)
-  }
-
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Deixa o usuário digitar livremente
-    setDisplay(e.target.value)
+    const inputVal = e.target.value
+    setDisplay(inputVal)
+
+    // Notifica o pai imediatamente com o valor numérico bruto
+    // para que form.valor esteja sempre atualizado
+    const raw = parseBRL(inputVal)
+    onChange({ target: { value: raw } })
   }
 
   const handleBlur = () => {
     setFocused(false)
+    // Apenas reformata o display na saída do campo
     const raw = parseBRL(display)
     if (!raw) {
       setDisplay('')
@@ -87,7 +95,7 @@ export function CurrencyInput({
           inputMode="decimal"
           value={display}
           onChange={handleChange}
-          onFocus={handleFocus}
+          onFocus={() => setFocused(true)}
           onBlur={handleBlur}
           placeholder={placeholder}
           className={cn(
