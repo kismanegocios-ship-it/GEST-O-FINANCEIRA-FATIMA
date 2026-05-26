@@ -115,16 +115,45 @@ export default function DespesasPage() {
     }
 
     // ── Modo normal: cria/edita 1 despesa ──
+    const hoje = format(new Date(), 'yyyy-MM-dd')
     const payload = {
       descricao: form.descricao, valor: parseFloat(form.valor), data_vencimento: form.data_vencimento,
       status: form.status, centro_custo_id: form.centro_custo_id || null, categoria_id: form.categoria_id || null,
       recorrente: form.recorrente, frequencia: form.recorrente ? form.frequencia : null, observacoes: form.observacoes || null,
+      // Registra data de pagamento ao marcar como pago
+      data_pagamento: form.status === 'pago' ? hoje : null,
     }
     const { error } = editando
       ? await supabase.from('despesas').update(payload).eq('id', editando.id)
       : await supabase.from('despesas').insert(payload)
+    if (error) { setSaving(false); toast.error('Erro ao salvar'); return }
+
+    // ── Se marcou como PAGO e antes era pendente/vencido → cria lançamento de saída ──
+    const eraDevedora = editando && ['pendente', 'vencido'].includes(editando.status)
+    const viroupago = form.status === 'pago'
+    if (eraDevedora && viroupago) {
+      // Verifica se já existe lancamento para essa despesa (evita duplicata)
+      const { data: lancExist } = await supabase
+        .from('lancamentos').select('id').eq('despesa_id', editando!.id).maybeSingle()
+      if (!lancExist) {
+        await supabase.from('lancamentos').insert({
+          descricao: `Pagamento: ${form.descricao}`,
+          valor: parseFloat(form.valor),
+          tipo: 'saida',
+          data: hoje,
+          despesa_id: editando!.id,
+          centro_custo_id: form.centro_custo_id || null,
+          categoria_id: form.categoria_id || null,
+          forma_pagamento: 'dinheiro',
+          conciliado: false,
+        })
+        toast.success('Despesa marcada como paga e saída registrada no fluxo de caixa! 💸')
+        setSaving(false); setModalOpen(false); load()
+        return
+      }
+    }
+
     setSaving(false)
-    if (error) { toast.error('Erro ao salvar'); return }
     toast.success(editando ? 'Despesa atualizada!' : 'Despesa cadastrada!')
     setModalOpen(false); load()
   }
