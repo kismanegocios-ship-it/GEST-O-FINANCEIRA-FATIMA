@@ -59,7 +59,9 @@ export default function RelatoriosPage() {
     }
     setMeses(mesesData)
 
-    const mesDate = new Date(mesSelecionado + '-01')
+    // Usa new Date(ano, mes-1, 1) para criar data em horário LOCAL
+    const [anoSel, mesSel] = mesSelecionado.split('-').map(Number)
+    const mesDate = new Date(anoSel, mesSel - 1, 1)
     const ini = format(startOfMonth(mesDate), 'yyyy-MM-dd')
     const fim = format(endOfMonth(mesDate), 'yyyy-MM-dd')
 
@@ -283,7 +285,7 @@ export default function RelatoriosPage() {
       <Card>
         <CardHeader>
           <CardTitle>
-            Fechamento - {format(new Date(mesSelecionado + '-01'), 'MMMM yyyy', { locale: ptBR })}
+            Fechamento - {format(new Date(+mesSelecionado.slice(0,4), +mesSelecionado.slice(5,7) - 1, 1), 'MMMM yyyy', { locale: ptBR })}
           </CardTitle>
         </CardHeader>
         <CardContent>

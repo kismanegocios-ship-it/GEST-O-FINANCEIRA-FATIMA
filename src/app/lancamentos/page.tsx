@@ -47,9 +47,13 @@ export default function LancamentosPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
+    // Usa new Date(ano, mes-1, 1) para criar data em horário LOCAL
+    // Evita bug de UTC: new Date('2026-05-01') vira abril no Brasil (UTC-3)
+    const [ano, mes] = mesFiltro.split('-').map(Number)
+    const mesDate = new Date(ano, mes - 1, 1)
     const [ini, fim] = [
-      format(startOfMonth(new Date(mesFiltro + '-01')), 'yyyy-MM-dd'),
-      format(endOfMonth(new Date(mesFiltro + '-01')), 'yyyy-MM-dd'),
+      format(startOfMonth(mesDate), 'yyyy-MM-dd'),
+      format(endOfMonth(mesDate), 'yyyy-MM-dd'),
     ]
     const [l, cc, cat] = await Promise.all([
       supabase.from('lancamentos').select('*, centros_custo(*), categorias(*)')
