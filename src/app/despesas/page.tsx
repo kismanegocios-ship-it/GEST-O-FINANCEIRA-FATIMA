@@ -116,12 +116,14 @@ export default function DespesasPage() {
 
     // ── Modo normal: cria/edita 1 despesa ──
     const hoje = format(new Date(), 'yyyy-MM-dd')
+    // Nova despesa SEMPRE entra como pendente — status só muda após criação
+    const statusFinal = editando ? form.status : 'pendente'
     const payload = {
       descricao: form.descricao, valor: parseFloat(form.valor), data_vencimento: form.data_vencimento,
-      status: form.status, centro_custo_id: form.centro_custo_id || null, categoria_id: form.categoria_id || null,
+      status: statusFinal, centro_custo_id: form.centro_custo_id || null, categoria_id: form.categoria_id || null,
       recorrente: form.recorrente, frequencia: form.recorrente ? form.frequencia : null, observacoes: form.observacoes || null,
-      // Registra data de pagamento ao marcar como pago
-      data_pagamento: form.status === 'pago' ? hoje : null,
+      // Registra data de pagamento ao marcar como pago via edição
+      data_pagamento: statusFinal === 'pago' ? hoje : null,
     }
     const { error } = editando
       ? await supabase.from('despesas').update(payload).eq('id', editando.id)
@@ -130,7 +132,7 @@ export default function DespesasPage() {
 
     // ── Se marcou como PAGO e antes era pendente/vencido → cria lançamento de saída ──
     const eraDevedora = editando && ['pendente', 'vencido'].includes(editando.status)
-    const viroupago = form.status === 'pago'
+    const viroupago = statusFinal === 'pago'
     if (eraDevedora && viroupago) {
       // Verifica se já existe lancamento para essa despesa (evita duplicata)
       const { data: lancExist } = await supabase
@@ -374,21 +376,35 @@ export default function DespesasPage() {
       {/* Modal Despesa */}
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editando ? 'Editar Despesa' : 'Nova Despesa'} size="lg">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Descricao — linha inteira */}
           <div className="col-span-1 sm:col-span-2">
-            <Input label="Descricao *" placeholder="Ex: Conta de luz, Aluguel..." value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))} />
+            <Input label="Descricao *" placeholder="Ex: Conta de luz, Aluguel, Fornecedor..." value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))} />
           </div>
+
+          {/* Valor + Vencimento */}
           <CurrencyInput label="Valor *" value={form.valor} onChange={e => setForm(f => ({ ...f, valor: e.target.value }))} />
           <Input label="Vencimento *" type="date" value={form.data_vencimento} onChange={e => setForm(f => ({ ...f, data_vencimento: e.target.value }))} />
-          <Select label="Status" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
-            <option value="pendente">Pendente</option>
-            <option value="pago">Pago</option>
-            <option value="vencido">Vencido</option>
-            <option value="cancelado">Cancelado</option>
-          </Select>
-          <Select label="Centro de Custo" value={form.centro_custo_id} onChange={e => setForm(f => ({ ...f, centro_custo_id: e.target.value }))}>
-            <option value="">Sem centro</option>
-            {centros.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-          </Select>
+
+          {/* Status só aparece ao EDITAR — nova despesa sempre entra como Pendente */}
+          {editando && (
+            <>
+              <Select label="Status" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
+                <option value="pendente">Pendente</option>
+                <option value="pago">Pago</option>
+                <option value="vencido">Vencido</option>
+                <option value="cancelado">Cancelado</option>
+              </Select>
+              <div /> {/* espaço para manter grid de 2 colunas */}
+            </>
+          )}
+
+          {/* Centro de Custo + Categoria — linha inteira cada */}
+          <div className="col-span-1 sm:col-span-2">
+            <Select label="Centro de Custo" value={form.centro_custo_id} onChange={e => setForm(f => ({ ...f, centro_custo_id: e.target.value }))}>
+              <option value="">Sem centro de custo</option>
+              {centros.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </Select>
+          </div>
           <div className="col-span-1 sm:col-span-2">
             <Select label="Categoria" value={form.categoria_id} onChange={e => setForm(f => ({ ...f, categoria_id: e.target.value }))}>
               <option value="">Sem categoria</option>
