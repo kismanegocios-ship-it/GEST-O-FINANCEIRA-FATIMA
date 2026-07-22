@@ -75,195 +75,187 @@ export default function ConciliacaoPage() {
   const parseCSV = (file: File) => {
     setParsendo(true)
 
-    // Lê o arquivo primeiro para detectar separador e encoding
     const reader = new FileReader()
     reader.onload = (ev) => {
       const raw = ev.target?.result as string ?? ''
 
-      // Normaliza texto para comparação
+      // ── Helpers ────────────────────────────────────────────────────────────
       const norm = (s: string) => s.toLowerCase()
-        .normalize('NFD').replace(/[̀-ͯ]/g, '')
-        .replace(/[^a-z0-9 ]/g, '').trim()
+        .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, '').trim()
 
-      // Detecta separador: ponto-e-virgula é o mais comum nos bancos BR
-      const semicolons = (raw.match(/;/g) ?? []).length
-      const commas   = (raw.match(/,/g) ?? []).length
-      const pipes     = (raw.match(/\|/g) ?? []).length
-      const delimiter = semicolons >= commas && semicolons >= pipes ? ';'
-                      : pipes > commas ? '|'
-                      : ','
-
-      // ── Pula linhas de metadados antes do cabeçalho real ────────────────
-      // Muitos bancos (Caixa, BB, Bradesco) colocam info da conta nas primeiras linhas
-      const todasLinhas = raw.split(/\r?\n/)
-      const headerWords = ['data', 'date', 'historico', 'descricao', 'lancamento',
-        'valor', 'credito', 'debito', 'movimento', 'amount', 'description', 'detalhe']
-      const isHeaderRow = (linha: string) => {
-        const n = norm(linha)
-        return headerWords.filter(w => n.includes(w)).length >= 2
+      const parseValorBR = (s?: string): number => {
+        if (!s) return NaN
+        const v = s.replace(/\s/g, '').replace(/R\$\s*/gi, '')
+        if (/\d\.\d{3},\d{2}/.test(v)) return parseFloat(v.replace(/\./g, '').replace(',', '.'))
+        if (/^-?\d+,\d+$/.test(v)) return parseFloat(v.replace(',', '.'))
+        return parseFloat(v.replace(/[^0-9.\-]/g, ''))
       }
-      const headerIdx = todasLinhas.findIndex(l => isHeaderRow(l))
-      // Se encontrou cabeçalho depois da linha 0 → pula metadados
-      const csvToParse = headerIdx > 0
-        ? todasLinhas.slice(headerIdx).join('\n')
-        : raw
+
+      const parseDataBR = (s: string): string => {
+        const d = s.trim()
+        if (/^\d{2}\/\d{2}\/\d{4}$/.test(d)) { const [dd,mm,yyyy]=d.split('/'); return `${yyyy}-${mm}-${dd}` }
+        if (/^\d{2}\/\d{2}\/\d{2}$/.test(d))  { const [dd,mm,yy]=d.split('/'); const y=+yy>50?`19${yy}`:`20${yy}`; return `${y}-${mm}-${dd}` }
+        if (/^\d{2}-\d{2}-\d{4}$/.test(d))    { const [dd,mm,yyyy]=d.split('-'); return `${yyyy}-${mm}-${dd}` }
+        if (/^\d{4}-\d{2}-\d{2}/.test(d))     return d.slice(0, 10)
+        if (/^\d{2}\/\d{2}$/.test(d))          { const [dd,mm]=d.split('/'); return `${new Date().getFullYear()}-${mm}-${dd}` }
+        return ''
+      }
+
+      const isDateVal = (s: string) => /^\d{2}[\/\-]\d{2}([\/\-]\d{2,4})?$/.test(s?.trim() ?? '')
+
+      // ── Detecta separador ──────────────────────────────────────────────────
+      const semis  = (raw.match(/;/g) ?? []).length
+      const commas = (raw.match(/,/g) ?? []).length
+      const pipes  = (raw.match(/\|/g) ?? []).length
+      const delimiter = semis >= commas && semis >= pipes ? ';' : pipes > commas ? '|' : ','
+
+      // ── Pre-processa linhas: detecta onde começam os dados reais ──────────
+      const allLines = raw.split(/\r?\n/).filter(l => l.trim())
+
+      // Linha de cabeçalho: tem ≥2 palavras-chave de coluna
+      const headerWords = ['data','date','historico','descricao','lancamento',
+        'valor','credito','debito','movimento','amount','description','detalhe','saldo']
+      const isHeaderRow = (l: string) =>
+        headerWords.filter(w => norm(l).includes(w)).length >= 2
+
+      // Linha de dados: primeiro campo (split por delimitador) é uma data dd/mm...
+      const isDataRow = (l: string) => isDateVal(l.split(delimiter)[0] ?? '')
+
+      const headerIdx   = allLines.findIndex(l => isHeaderRow(l))
+      const firstDataIdx = allLines.findIndex(l => isDataRow(l))
+
+      if (firstDataIdx === -1) {
+        setImportados([])
+        setParsendo(false)
+        toast.error('Nenhuma data encontrada no arquivo. Verifique o formato ou tente OFX/QFX.')
+        return
+      }
+
+      // Determina se há cabeçalho antes dos dados
+      const hasHeader = headerIdx !== -1 && headerIdx < firstDataIdx
+      const csvToParse = hasHeader
+        ? allLines.slice(headerIdx).join('\n')
+        : allLines.slice(firstDataIdx).join('\n')
 
       Papa.parse(csvToParse, {
-        header: true,
+        header: hasHeader,
         skipEmptyLines: true,
         delimiter,
         complete: (result) => {
-          const rows = result.data as Record<string, string>[]
           const itens: ExtratoImportado[] = []
 
-          // Mapeamentos de colunas ampliados para todos os bancos BR
-          const DESC_KEYS = ['descricao', 'historico', 'lancamento', 'lancamento',
-            'historico', 'memo', 'description', 'title', 'detalhe', 'complemento',
-            'identificacao', 'nome', 'estabelecimento', 'historico lancamento']
-          const DATA_KEYS = ['data', 'date', 'dt', 'dt lancamento', 'data lancamento',
-            'data mov', 'data movimento', 'data transacao', 'posted date', 'datamovimento',
-            'data do lancamento', 'datahora']
-          const VALOR_KEYS = ['valor', 'value', 'amount', 'vlr', 'quantia',
-            'montante', 'total', 'valor lancamento', 'valor transacao']
-          const CREDITO_KEYS = ['credito', 'entrada', 'credit', 'credito r$', 'entrada r$',
-            'valor credito', 'credito rs']
-          const DEBITO_KEYS = ['debito', 'saida', 'debit', 'debito r$', 'saida r$',
-            'pagamento r$', 'valor debito', 'debito rs']
+          if (hasHeader) {
+            // ── Caminho com cabeçalho: usa nomes de colunas ─────────────────
+            const rows = result.data as Record<string, string>[]
+            if (!rows.length) { setImportados([]); setParsendo(false); toast.error('Arquivo vazio.'); return }
 
-          const findKey = (keys: string[], cols: string[]) =>
-            cols.find(c => keys.includes(norm(c)))
+            const cols = Object.keys(rows[0])
+            const DESC_KEYS    = ['descricao','historico','lancamento','memo','description','detalhe','complemento','identificacao','nome','estabelecimento','historico lancamento']
+            const DATA_KEYS    = ['data','date','dt','dt lancamento','data lancamento','data mov','data movimento','data transacao','posted date','datamovimento','data do lancamento']
+            const VALOR_KEYS   = ['valor','value','amount','vlr','quantia','montante','valor lancamento','valor transacao']
+            const CREDITO_KEYS = ['credito','entrada','credit','credito r$','entrada r$','valor credito','credito rs']
+            const DEBITO_KEYS  = ['debito','saida','debit','debito r$','saida r$','pagamento r$','valor debito','debito rs']
+            const findKey = (keys: string[], cs: string[]) => cs.find(c => keys.includes(norm(c)))
 
-          if (rows.length === 0) {
-            setImportados([])
-            setParsendo(false)
-            toast.error('Arquivo vazio ou sem dados validos.')
-            return
-          }
+            const dataKey    = findKey(DATA_KEYS, cols)
+            const valorKey   = findKey(VALOR_KEYS, cols)
+            const creditoKey = findKey(CREDITO_KEYS, cols)
+            const debitoKey  = findKey(DEBITO_KEYS, cols)
+            const descKey    = findKey(DESC_KEYS, cols)
 
-          const cols = Object.keys(rows[0])
-          const descKey    = findKey(DESC_KEYS, cols)
-          const dataKey    = findKey(DATA_KEYS, cols)
-          const valorKey   = findKey(VALOR_KEYS, cols)
-          const creditoKey = findKey(CREDITO_KEYS, cols)
-          const debitoKey  = findKey(DEBITO_KEYS, cols)
-
-          // ── Fallback: tenta detectar colunas por conteúdo se header não reconhecido ──
-          // Verifica primeira row com dados reais
-          const firstDataRow = rows.find(r => {
-            return Object.values(r).some(v => /\d{2}[\/\-]\d{2}/.test(v ?? ''))
-          })
-
-          // Sem coluna de data conhecida: tenta encontrar por conteúdo
-          let dataKeyResolved = dataKey
-          if (!dataKey && firstDataRow) {
-            dataKeyResolved = cols.find(c => /\d{2}[\/\-]\d{2}/.test(firstDataRow[c] ?? ''))
-          }
-
-          if (!dataKeyResolved) {
-            setImportados([])
-            setParsendo(false)
-            toast.error(
-              `Formato de CSV não reconhecido. Colunas encontradas: ${cols.slice(0, 6).join(', ')}. ` +
-              'Tente exportar como OFX/QFX pelo app do banco.'
-            )
-            return
-          }
-
-          const parseValorBR = (s?: string): number => {
-            if (!s) return NaN
-            const limpo = s.replace(/\s/g, '')
-              .replace(/R\$\s*/gi, '')
-            // Detecta formato BR (ponto milhar, vírgula decimal) vs EN
-            if (/\d\.\d{3},\d{2}/.test(limpo)) {
-              return parseFloat(limpo.replace(/\./g, '').replace(',', '.'))
+            if (!dataKey) {
+              setImportados([]); setParsendo(false)
+              toast.error(`Coluna de data não encontrada. Colunas: ${cols.slice(0,5).join(', ')}`)
+              return
             }
-            // Só virgula decimal (sem ponto milhar): 1234,56
-            if (/^\-?\d+,\d+$/.test(limpo)) {
-              return parseFloat(limpo.replace(',', '.'))
-            }
-            return parseFloat(limpo.replace(/[^0-9.\-]/g, ''))
-          }
 
-          const parseDataBR = (s: string): string => {
-            const d = s.trim()
-            // dd/mm/yyyy
-            if (/^\d{2}\/\d{2}\/\d{4}$/.test(d)) {
-              const [dd, mm, yyyy] = d.split('/')
-              return `${yyyy}-${mm}-${dd}`
-            }
-            // dd/mm/yy
-            if (/^\d{2}\/\d{2}\/\d{2}$/.test(d)) {
-              const [dd, mm, yy] = d.split('/')
-              const yyyy = parseInt(yy) > 50 ? `19${yy}` : `20${yy}`
-              return `${yyyy}-${mm}-${dd}`
-            }
-            // dd-mm-yyyy
-            if (/^\d{2}-\d{2}-\d{4}$/.test(d)) {
-              const [dd, mm, yyyy] = d.split('-')
-              return `${yyyy}-${mm}-${dd}`
-            }
-            // yyyy-mm-dd (ISO)
-            if (/^\d{4}-\d{2}-\d{2}/.test(d)) return d.slice(0, 10)
-            // dd/mm (sem ano)
-            if (/^\d{2}\/\d{2}$/.test(d)) {
-              const [dd, mm] = d.split('/')
-              return `${new Date().getFullYear()}-${mm}-${dd}`
-            }
-            return ''
-          }
+            for (const row of rows) {
+              const dataRaw = row[dataKey]?.trim()
+              if (!dataRaw) continue
+              const data = parseDataBR(dataRaw)
+              if (!data) continue
 
-          for (const row of rows) {
-            const dataRaw = dataKeyResolved ? row[dataKeyResolved]?.trim() : ''
-            if (!dataRaw) continue
-            const data = parseDataBR(dataRaw)
-            if (!data) continue
+              let valor = 0, tipo: 'credito' | 'debito' = 'debito'
+              if (creditoKey || debitoKey) {
+                const vc = parseValorBR(creditoKey ? row[creditoKey] : '')
+                const vd = parseValorBR(debitoKey  ? row[debitoKey]  : '')
+                if (!isNaN(vc) && vc > 0) { valor = vc; tipo = 'credito' }
+                else if (!isNaN(vd) && vd > 0) { valor = vd; tipo = 'debito' }
+                else continue
+              } else if (valorKey) {
+                const v = parseValorBR(row[valorKey])
+                if (isNaN(v) || v === 0) continue
+                valor = Math.abs(v); tipo = v < 0 ? 'debito' : 'credito'
+              } else continue
 
-            let valor = 0
-            let tipo: 'credito' | 'debito' = 'debito'
+              let descricao = descKey ? row[descKey]?.trim() : ''
+              if (!descricao) {
+                descricao = cols
+                  .filter(c => c !== dataKey && c !== valorKey && c !== creditoKey && c !== debitoKey)
+                  .map(c => row[c]?.trim()).filter(Boolean).join(' ').slice(0, 80)
+              }
+              itens.push({ descricao: (descricao || 'Lancamento').slice(0, 80), valor, data, tipo })
+            }
 
-            if (creditoKey || debitoKey) {
-              // Bancos com colunas separadas (Itaú, BB, Bradesco Desktop)
-              const vCredito = parseValorBR(creditoKey ? row[creditoKey] : '')
-              const vDebito  = parseValorBR(debitoKey  ? row[debitoKey]  : '')
-              if (!isNaN(vCredito) && vCredito > 0) { valor = vCredito; tipo = 'credito' }
-              else if (!isNaN(vDebito) && vDebito > 0) { valor = vDebito; tipo = 'debito' }
-              else continue
-            } else if (valorKey) {
-              const v = parseValorBR(row[valorKey])
+          } else {
+            // ── Caminho sem cabeçalho: detecção por posição de coluna ───────
+            const rows = result.data as string[][]
+            if (!rows.length) { setImportados([]); setParsendo(false); toast.error('Arquivo vazio.'); return }
+
+            // Coluna de data: campo cujo valor casa com padrão de data na maioria das linhas
+            const numCols = Math.max(...rows.map(r => r.length))
+            const dateColIdx = Array.from({length: numCols}, (_, i) => i)
+              .find(ci => rows.filter(r => isDateVal(r[ci] ?? '')).length > rows.length * 0.5) ?? 0
+
+            // Colunas numéricas (≥50% das rows têm número válido)
+            const isNum = (s?: string) => s !== undefined && s.trim() !== '' && !isNaN(parseValorBR(s)) && parseValorBR(s) !== 0
+            const numericCols = Array.from({length: numCols}, (_, i) => i)
+              .filter(ci => ci !== dateColIdx && rows.filter(r => isNum(r[ci])).length > rows.length * 0.4)
+
+            // Coluna de valor: preferir a que tem números negativos (débitos); se empate, primeira numérica
+            const hasNeg = (ci: number) => rows.some(r => (r[ci] ?? '').trim().startsWith('-'))
+            let valueColIdx = numericCols.find(ci => hasNeg(ci)) ?? numericCols[0] ?? -1
+
+            // Se há 2+ colunas numéricas e nenhuma tem negativo, pula a última (saldo)
+            if (numericCols.length >= 2 && valueColIdx === numericCols[numericCols.length - 1]) {
+              valueColIdx = numericCols[numericCols.length - 2]
+            }
+
+            if (valueColIdx === -1) {
+              setImportados([]); setParsendo(false)
+              toast.error('Não foi possível detectar coluna de valor. Tente OFX/QFX.')
+              return
+            }
+
+            const descCols = Array.from({length: numCols}, (_, i) => i)
+              .filter(ci => ci !== dateColIdx && !numericCols.includes(ci))
+
+            for (const row of rows) {
+              const dataRaw = row[dateColIdx]?.trim()
+              if (!dataRaw) continue
+              const data = parseDataBR(dataRaw)
+              if (!data) continue
+
+              const v = parseValorBR(row[valueColIdx])
               if (isNaN(v) || v === 0) continue
-              valor = Math.abs(v)
-              tipo = v < 0 ? 'debito' : 'credito'
-            } else {
-              continue
-            }
+              const valor = Math.abs(v)
+              const tipo: 'credito' | 'debito' = v < 0 ? 'debito' : 'credito'
 
-            // Descrição: usa coluna ou concatena todas as colunas não-usadas
-            let descricao = descKey ? row[descKey]?.trim() : ''
-            if (!descricao) {
-              descricao = cols
-                .filter(c => c !== dataKeyResolved && c !== valorKey && c !== creditoKey && c !== debitoKey)
-                .map(c => row[c]?.trim()).filter(Boolean).join(' ').slice(0, 80)
+              const descricao = descCols
+                .map(ci => row[ci]?.trim()).filter(Boolean).join(' ').slice(0, 80) || 'Lancamento'
+              itens.push({ descricao, valor, data, tipo })
             }
-            if (!descricao) descricao = 'Lancamento'
-
-            itens.push({ descricao: descricao.slice(0, 80), valor, data, tipo })
           }
 
           setImportados(itens)
           setParsendo(false)
           if (itens.length === 0) {
-            toast.error(
-              `Nenhuma transacao encontrada. Colunas detectadas: ${cols.join(', ')}. ` +
-              'Tente exportar como OFX pelo seu banco.'
-            )
+            toast.error('Nenhuma transação encontrada no CSV. Tente exportar como OFX/QFX pelo app do banco.')
           } else {
             toast.success(`${itens.length} lancamentos encontrados!`)
           }
         },
-        error: () => {
-          setParsendo(false)
-          toast.error('Erro ao ler o arquivo CSV')
-        },
+        error: () => { setParsendo(false); toast.error('Erro ao ler o arquivo CSV') },
       })
     }
     reader.onerror = () => { setParsendo(false); toast.error('Erro ao ler arquivo') }
