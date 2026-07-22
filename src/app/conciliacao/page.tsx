@@ -80,12 +80,35 @@ export default function ConciliacaoPage() {
     reader.onload = (ev) => {
       const raw = ev.target?.result as string ?? ''
 
+      // Normaliza texto para comparação
+      const norm = (s: string) => s.toLowerCase()
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .replace(/[^a-z0-9 ]/g, '').trim()
+
       // Detecta separador: ponto-e-virgula é o mais comum nos bancos BR
       const semicolons = (raw.match(/;/g) ?? []).length
-      const commas = (raw.match(/,/g) ?? []).length
-      const delimiter = semicolons > commas ? ';' : ','
+      const commas   = (raw.match(/,/g) ?? []).length
+      const pipes     = (raw.match(/\|/g) ?? []).length
+      const delimiter = semicolons >= commas && semicolons >= pipes ? ';'
+                      : pipes > commas ? '|'
+                      : ','
 
-      Papa.parse(raw, {
+      // ── Pula linhas de metadados antes do cabeçalho real ────────────────
+      // Muitos bancos (Caixa, BB, Bradesco) colocam info da conta nas primeiras linhas
+      const todasLinhas = raw.split(/\r?\n/)
+      const headerWords = ['data', 'date', 'historico', 'descricao', 'lancamento',
+        'valor', 'credito', 'debito', 'movimento', 'amount', 'description', 'detalhe']
+      const isHeaderRow = (linha: string) => {
+        const n = norm(linha)
+        return headerWords.filter(w => n.includes(w)).length >= 2
+      }
+      const headerIdx = todasLinhas.findIndex(l => isHeaderRow(l))
+      // Se encontrou cabeçalho depois da linha 0 → pula metadados
+      const csvToParse = headerIdx > 0
+        ? todasLinhas.slice(headerIdx).join('\n')
+        : raw
+
+      Papa.parse(csvToParse, {
         header: true,
         skipEmptyLines: true,
         delimiter,
@@ -93,21 +116,19 @@ export default function ConciliacaoPage() {
           const rows = result.data as Record<string, string>[]
           const itens: ExtratoImportado[] = []
 
-          // Normaliza nome de coluna para comparação
-          const norm = (s: string) => s.toLowerCase()
-            .normalize('NFD').replace(/[̀-ͯ]/g, '') // remove acentos
-            .replace(/[^a-z0-9 ]/g, '').trim()
-
           // Mapeamentos de colunas ampliados para todos os bancos BR
-          const DESC_KEYS = ['descricao', 'historico', 'lancamento', 'lançamento',
+          const DESC_KEYS = ['descricao', 'historico', 'lancamento', 'lancamento',
             'historico', 'memo', 'description', 'title', 'detalhe', 'complemento',
-            'identificacao', 'nome', 'estabelecimento']
+            'identificacao', 'nome', 'estabelecimento', 'historico lancamento']
           const DATA_KEYS = ['data', 'date', 'dt', 'dt lancamento', 'data lancamento',
-            'data mov', 'data movimento', 'data transacao', 'posted date', 'datamovimento']
+            'data mov', 'data movimento', 'data transacao', 'posted date', 'datamovimento',
+            'data do lancamento', 'datahora']
           const VALOR_KEYS = ['valor', 'value', 'amount', 'vlr', 'quantia',
-            'montante', 'total']
-          const CREDITO_KEYS = ['credito', 'entrada', 'credit', 'credito r$', 'entrada r$']
-          const DEBITO_KEYS = ['debito', 'saida', 'debit', 'debito r$', 'saida r$', 'pagamento r$']
+            'montante', 'total', 'valor lancamento', 'valor transacao']
+          const CREDITO_KEYS = ['credito', 'entrada', 'credit', 'credito r$', 'entrada r$',
+            'valor credito', 'credito rs']
+          const DEBITO_KEYS = ['debito', 'saida', 'debit', 'debito r$', 'saida r$',
+            'pagamento r$', 'valor debito', 'debito rs']
 
           const findKey = (keys: string[], cols: string[]) =>
             cols.find(c => keys.includes(norm(c)))
@@ -120,17 +141,31 @@ export default function ConciliacaoPage() {
           }
 
           const cols = Object.keys(rows[0])
-          const descKey  = findKey(DESC_KEYS, cols)
-          const dataKey  = findKey(DATA_KEYS, cols)
-          const valorKey = findKey(VALOR_KEYS, cols)
+          const descKey    = findKey(DESC_KEYS, cols)
+          const dataKey    = findKey(DATA_KEYS, cols)
+          const valorKey   = findKey(VALOR_KEYS, cols)
           const creditoKey = findKey(CREDITO_KEYS, cols)
           const debitoKey  = findKey(DEBITO_KEYS, cols)
 
-          // Sem coluna de data: não dá pra importar
-          if (!dataKey) {
+          // ── Fallback: tenta detectar colunas por conteúdo se header não reconhecido ──
+          // Verifica primeira row com dados reais
+          const firstDataRow = rows.find(r => {
+            return Object.values(r).some(v => /\d{2}[\/\-]\d{2}/.test(v ?? ''))
+          })
+
+          // Sem coluna de data conhecida: tenta encontrar por conteúdo
+          let dataKeyResolved = dataKey
+          if (!dataKey && firstDataRow) {
+            dataKeyResolved = cols.find(c => /\d{2}[\/\-]\d{2}/.test(firstDataRow[c] ?? ''))
+          }
+
+          if (!dataKeyResolved) {
             setImportados([])
             setParsendo(false)
-            toast.error(`Coluna de data nao encontrada. Colunas do arquivo: ${cols.join(', ')}`)
+            toast.error(
+              `Formato de CSV não reconhecido. Colunas encontradas: ${cols.slice(0, 6).join(', ')}. ` +
+              'Tente exportar como OFX/QFX pelo app do banco.'
+            )
             return
           }
 
@@ -178,7 +213,7 @@ export default function ConciliacaoPage() {
           }
 
           for (const row of rows) {
-            const dataRaw = dataKey ? row[dataKey]?.trim() : ''
+            const dataRaw = dataKeyResolved ? row[dataKeyResolved]?.trim() : ''
             if (!dataRaw) continue
             const data = parseDataBR(dataRaw)
             if (!data) continue
@@ -206,7 +241,7 @@ export default function ConciliacaoPage() {
             let descricao = descKey ? row[descKey]?.trim() : ''
             if (!descricao) {
               descricao = cols
-                .filter(c => c !== dataKey && c !== valorKey && c !== creditoKey && c !== debitoKey)
+                .filter(c => c !== dataKeyResolved && c !== valorKey && c !== creditoKey && c !== debitoKey)
                 .map(c => row[c]?.trim()).filter(Boolean).join(' ').slice(0, 80)
             }
             if (!descricao) descricao = 'Lancamento'
