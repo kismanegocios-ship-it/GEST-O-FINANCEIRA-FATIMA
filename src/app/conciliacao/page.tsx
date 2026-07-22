@@ -85,14 +85,16 @@ export default function ConciliacaoPage() {
 
       const parseValorBR = (s?: string): number => {
         if (!s) return NaN
-        const v = s.replace(/\s/g, '').replace(/R\$\s*/gi, '')
+        const v = s.replace(/\s/g, '').replace(/R\$\s*/gi, '').replace(/^"+|"+$/g, '')
         if (/\d\.\d{3},\d{2}/.test(v)) return parseFloat(v.replace(/\./g, '').replace(',', '.'))
         if (/^-?\d+,\d+$/.test(v)) return parseFloat(v.replace(',', '.'))
-        return parseFloat(v.replace(/[^0-9.\-]/g, ''))
+        if (/^-?\d+\.\d{2}$/.test(v)) return parseFloat(v)
+        const n = parseFloat(v.replace(/[^0-9.\-]/g, ''))
+        return isNaN(n) ? NaN : n
       }
 
       const parseDataBR = (s: string): string => {
-        const d = s.trim()
+        const d = s.trim().replace(/^"+|"+$/g, '')
         if (/^\d{2}\/\d{2}\/\d{4}$/.test(d)) { const [dd,mm,yyyy]=d.split('/'); return `${yyyy}-${mm}-${dd}` }
         if (/^\d{2}\/\d{2}\/\d{2}$/.test(d))  { const [dd,mm,yy]=d.split('/'); const y=+yy>50?`19${yy}`:`20${yy}`; return `${y}-${mm}-${dd}` }
         if (/^\d{2}-\d{2}-\d{4}$/.test(d))    { const [dd,mm,yyyy]=d.split('-'); return `${yyyy}-${mm}-${dd}` }
@@ -101,7 +103,12 @@ export default function ConciliacaoPage() {
         return ''
       }
 
-      const isDateVal = (s: string) => /^\d{2}[\/\-]\d{2}([\/\-]\d{2,4})?$/.test(s?.trim() ?? '')
+      // Campo que é uma data isolada (ex: 02/01/26 ou 05/01/2026) — sem espaços e tamanho curto
+      const isRowDate = (s?: string) => {
+        if (!s) return false
+        const t = s.trim().replace(/^"+|"+$/g, '')
+        return t.length <= 10 && !t.includes(' ') && /^\d{2}[\/\-]\d{2}([\/\-]\d{2,4})?$/.test(t)
+      }
 
       // ── Detecta separador ──────────────────────────────────────────────────
       const semis  = (raw.match(/;/g) ?? []).length
@@ -109,157 +116,229 @@ export default function ConciliacaoPage() {
       const pipes  = (raw.match(/\|/g) ?? []).length
       const delimiter = semis >= commas && semis >= pipes ? ';' : pipes > commas ? '|' : ','
 
-      // ── Pre-processa linhas: detecta onde começam os dados reais ──────────
+      // ── Detecta se é formato "flat" (tudo em poucas linhas longas) ─────────
+      // Bradesco e outros exportam tudo em 1 linha sem \n entre registros
       const allLines = raw.split(/\r?\n/).filter(l => l.trim())
+      const longestLine = Math.max(...allLines.map(l => l.length))
+      const isFlat = longestLine > 500   // linha > 500 chars = formato flat
 
-      // Linha de cabeçalho: tem ≥2 palavras-chave de coluna
-      const headerWords = ['data','date','historico','descricao','lancamento',
-        'valor','credito','debito','movimento','amount','description','detalhe','saldo']
-      const isHeaderRow = (l: string) =>
-        headerWords.filter(w => norm(l).includes(w)).length >= 2
+      const itens: ExtratoImportado[] = []
 
-      // Linha de dados: primeiro campo (split por delimitador) é uma data dd/mm...
-      const isDataRow = (l: string) => isDateVal(l.split(delimiter)[0] ?? '')
-
-      const headerIdx   = allLines.findIndex(l => isHeaderRow(l))
-      const firstDataIdx = allLines.findIndex(l => isDataRow(l))
-
-      if (firstDataIdx === -1) {
-        setImportados([])
+      const finalize = () => {
+        setImportados(itens)
         setParsendo(false)
-        toast.error('Nenhuma data encontrada no arquivo. Verifique o formato ou tente OFX/QFX.')
-        return
+        if (itens.length === 0) {
+          toast.error('Nenhuma transação encontrada no CSV. Tente exportar como OFX/QFX pelo app do banco.')
+        } else {
+          toast.success(`${itens.length} lancamentos encontrados!`)
+        }
       }
 
-      // Determina se há cabeçalho antes dos dados
-      const hasHeader = headerIdx !== -1 && headerIdx < firstDataIdx
-      const csvToParse = hasHeader
-        ? allLines.slice(headerIdx).join('\n')
-        : allLines.slice(firstDataIdx).join('\n')
+      if (isFlat) {
+        // ── Formato flat: reconstrói registros pela posição de campos ─────────
+        // Usa PapaParse para tratar aspas corretamente
+        Papa.parse(raw, {
+          header: false,
+          delimiter,
+          complete: (result) => {
+            // Tudo vira um array plano de campos
+            const allFields = (result.data as string[][]).flat()
+              .map(s => (s ?? '').trim().replace(/^"+|"+$/g, ''))
 
-      Papa.parse(csvToParse, {
-        header: hasHeader,
-        skipEmptyLines: true,
-        delimiter,
-        complete: (result) => {
-          const itens: ExtratoImportado[] = []
-
-          if (hasHeader) {
-            // ── Caminho com cabeçalho: usa nomes de colunas ─────────────────
-            const rows = result.data as Record<string, string>[]
-            if (!rows.length) { setImportados([]); setParsendo(false); toast.error('Arquivo vazio.'); return }
-
-            const cols = Object.keys(rows[0])
-            const DESC_KEYS    = ['descricao','historico','lancamento','memo','description','detalhe','complemento','identificacao','nome','estabelecimento','historico lancamento']
-            const DATA_KEYS    = ['data','date','dt','dt lancamento','data lancamento','data mov','data movimento','data transacao','posted date','datamovimento','data do lancamento']
-            const VALOR_KEYS   = ['valor','value','amount','vlr','quantia','montante','valor lancamento','valor transacao']
-            const CREDITO_KEYS = ['credito','entrada','credit','credito r$','entrada r$','valor credito','credito rs']
-            const DEBITO_KEYS  = ['debito','saida','debit','debito r$','saida r$','pagamento r$','valor debito','debito rs']
-            const findKey = (keys: string[], cs: string[]) => cs.find(c => keys.includes(norm(c)))
-
-            const dataKey    = findKey(DATA_KEYS, cols)
-            const valorKey   = findKey(VALOR_KEYS, cols)
-            const creditoKey = findKey(CREDITO_KEYS, cols)
-            const debitoKey  = findKey(DEBITO_KEYS, cols)
-            const descKey    = findKey(DESC_KEYS, cols)
-
-            if (!dataKey) {
+            // Encontra o primeiro campo que é uma data de transação
+            const firstDateIdx = allFields.findIndex(f => isRowDate(f))
+            if (firstDateIdx === -1) {
               setImportados([]); setParsendo(false)
-              toast.error(`Coluna de data não encontrada. Colunas: ${cols.slice(0,5).join(', ')}`)
+              toast.error('Nenhuma data encontrada no arquivo. Tente OFX/QFX.')
               return
             }
 
-            for (const row of rows) {
-              const dataRaw = row[dataKey]?.trim()
-              if (!dataRaw) continue
-              const data = parseDataBR(dataRaw)
-              if (!data) continue
+            // Campos antes da 1ª data = cabeçalho/metadados
+            const headerFields = allFields.slice(0, firstDateIdx)
+            const hNorms = headerFields.map(norm)
+
+            // Detecta posições relativas pelo nome da coluna (com fallback por posição)
+            const findH = (keys: string[]) =>
+              hNorms.findIndex(n => keys.some(k => n.includes(k)))
+
+            let descRel    = findH(['hist','descr','lancam','memo','desc'])
+            let creditoRel = findH(['credito','entrada','credit'])
+            let debitoRel  = findH(['debito','saida','debit'])
+            let valorRel   = findH(['valor r','amount','quantia','total'])
+            const rowLen   = headerFields.length
+
+            // Fallback por posição para bancos com encoding problemático (Bradesco)
+            if (creditoRel === -1 && debitoRel === -1 && valorRel === -1 && rowLen >= 5) {
+              // Convenção mais comum BR: Data(0) Hist(1) Docto(2) Crédito(3) Débito(4) Saldo(5)
+              descRel = 1; creditoRel = 3; debitoRel = 4
+            }
+            if (descRel === -1) descRel = 1
+
+            // Percorre campos detectando início de cada registro pela data
+            let i = firstDateIdx
+            while (i < allFields.length) {
+              if (!isRowDate(allFields[i])) { i++; continue }
+
+              const dateRaw = allFields[i]
+              const data = parseDataBR(dateRaw)
+              if (!data) { i++; continue }
+
+              i++
+              const row: string[] = [dateRaw]
+              while (i < allFields.length && !isRowDate(allFields[i])) {
+                row.push(allFields[i]); i++
+              }
+
+              // Ignora saldo anterior e totalizadores
+              const descRaw = row[descRel]?.trim() ?? ''
+              if (/saldo anterior|^total\b/i.test(descRaw)) continue
 
               let valor = 0, tipo: 'credito' | 'debito' = 'debito'
-              if (creditoKey || debitoKey) {
-                const vc = parseValorBR(creditoKey ? row[creditoKey] : '')
-                const vd = parseValorBR(debitoKey  ? row[debitoKey]  : '')
-                if (!isNaN(vc) && vc > 0) { valor = vc; tipo = 'credito' }
-                else if (!isNaN(vd) && vd > 0) { valor = vd; tipo = 'debito' }
+
+              if (creditoRel !== -1 || debitoRel !== -1) {
+                const vc = parseValorBR(creditoRel >= 0 ? row[creditoRel] : '')
+                const vd = parseValorBR(debitoRel  >= 0 ? row[debitoRel]  : '')
+                if (!isNaN(vc) && vc > 0)  { valor = vc; tipo = 'credito' }
+                else if (!isNaN(vd) && vd !== 0) { valor = Math.abs(vd); tipo = 'debito' }
                 else continue
-              } else if (valorKey) {
-                const v = parseValorBR(row[valorKey])
+              } else if (valorRel >= 0) {
+                const v = parseValorBR(row[valorRel])
                 if (isNaN(v) || v === 0) continue
                 valor = Math.abs(v); tipo = v < 0 ? 'debito' : 'credito'
               } else continue
 
-              let descricao = descKey ? row[descKey]?.trim() : ''
-              if (!descricao) {
-                descricao = cols
-                  .filter(c => c !== dataKey && c !== valorKey && c !== creditoKey && c !== debitoKey)
-                  .map(c => row[c]?.trim()).filter(Boolean).join(' ').slice(0, 80)
-              }
-              itens.push({ descricao: (descricao || 'Lancamento').slice(0, 80), valor, data, tipo })
-            }
+              // Descrição: campo principal + complemento (campos além do rowLen)
+              const complement = row.slice(rowLen).filter(Boolean).join(' ').slice(0, 40)
+              const descricao = [descRaw, complement].filter(Boolean).join(' - ').slice(0, 80) || 'Lancamento'
 
-          } else {
-            // ── Caminho sem cabeçalho: detecção por posição de coluna ───────
-            const rows = result.data as string[][]
-            if (!rows.length) { setImportados([]); setParsendo(false); toast.error('Arquivo vazio.'); return }
-
-            // Coluna de data: campo cujo valor casa com padrão de data na maioria das linhas
-            const numCols = Math.max(...rows.map(r => r.length))
-            const dateColIdx = Array.from({length: numCols}, (_, i) => i)
-              .find(ci => rows.filter(r => isDateVal(r[ci] ?? '')).length > rows.length * 0.5) ?? 0
-
-            // Colunas numéricas (≥50% das rows têm número válido)
-            const isNum = (s?: string) => s !== undefined && s.trim() !== '' && !isNaN(parseValorBR(s)) && parseValorBR(s) !== 0
-            const numericCols = Array.from({length: numCols}, (_, i) => i)
-              .filter(ci => ci !== dateColIdx && rows.filter(r => isNum(r[ci])).length > rows.length * 0.4)
-
-            // Coluna de valor: preferir a que tem números negativos (débitos); se empate, primeira numérica
-            const hasNeg = (ci: number) => rows.some(r => (r[ci] ?? '').trim().startsWith('-'))
-            let valueColIdx = numericCols.find(ci => hasNeg(ci)) ?? numericCols[0] ?? -1
-
-            // Se há 2+ colunas numéricas e nenhuma tem negativo, pula a última (saldo)
-            if (numericCols.length >= 2 && valueColIdx === numericCols[numericCols.length - 1]) {
-              valueColIdx = numericCols[numericCols.length - 2]
-            }
-
-            if (valueColIdx === -1) {
-              setImportados([]); setParsendo(false)
-              toast.error('Não foi possível detectar coluna de valor. Tente OFX/QFX.')
-              return
-            }
-
-            const descCols = Array.from({length: numCols}, (_, i) => i)
-              .filter(ci => ci !== dateColIdx && !numericCols.includes(ci))
-
-            for (const row of rows) {
-              const dataRaw = row[dateColIdx]?.trim()
-              if (!dataRaw) continue
-              const data = parseDataBR(dataRaw)
-              if (!data) continue
-
-              const v = parseValorBR(row[valueColIdx])
-              if (isNaN(v) || v === 0) continue
-              const valor = Math.abs(v)
-              const tipo: 'credito' | 'debito' = v < 0 ? 'debito' : 'credito'
-
-              const descricao = descCols
-                .map(ci => row[ci]?.trim()).filter(Boolean).join(' ').slice(0, 80) || 'Lancamento'
               itens.push({ descricao, valor, data, tipo })
             }
-          }
 
-          setImportados(itens)
-          setParsendo(false)
-          if (itens.length === 0) {
-            toast.error('Nenhuma transação encontrada no CSV. Tente exportar como OFX/QFX pelo app do banco.')
-          } else {
-            toast.success(`${itens.length} lancamentos encontrados!`)
-          }
-        },
-        error: () => { setParsendo(false); toast.error('Erro ao ler o arquivo CSV') },
-      })
+            finalize()
+          },
+          error: () => { setParsendo(false); toast.error('Erro ao ler o arquivo CSV') },
+        })
+
+      } else {
+        // ── Formato com newlines (padrão) ─────────────────────────────────────
+        const headerWords = ['data','date','historico','descricao','lancamento',
+          'valor','credito','debito','movimento','amount','description','detalhe','saldo']
+        const isHeaderRow = (l: string) =>
+          headerWords.filter(w => norm(l).includes(w)).length >= 2
+        const isDataRow   = (l: string) => isRowDate(l.split(delimiter)[0])
+
+        const headerIdx    = allLines.findIndex(l => isHeaderRow(l))
+        const firstDataIdx = allLines.findIndex(l => isDataRow(l))
+
+        if (firstDataIdx === -1) {
+          setImportados([]); setParsendo(false)
+          toast.error('Nenhuma data encontrada no arquivo. Tente OFX/QFX.')
+          return
+        }
+
+        const hasHeader  = headerIdx !== -1 && headerIdx < firstDataIdx
+        const csvToParse = hasHeader
+          ? allLines.slice(headerIdx).join('\n')
+          : allLines.slice(firstDataIdx).join('\n')
+
+        Papa.parse(csvToParse, {
+          header: hasHeader,
+          skipEmptyLines: true,
+          delimiter,
+          complete: (result) => {
+            if (hasHeader) {
+              const rows = result.data as Record<string, string>[]
+              if (!rows.length) { setImportados([]); setParsendo(false); toast.error('Arquivo vazio.'); return }
+
+              const cols = Object.keys(rows[0])
+              const DESC_KEYS    = ['descricao','historico','hist','lancamento','memo','description','detalhe']
+              const DATA_KEYS    = ['data','date','dt lancamento','data lancamento','data mov','datamovimento','data do lancamento']
+              const VALOR_KEYS   = ['valor','amount','vlr','quantia','montante']
+              const CREDITO_KEYS = ['credito','entrada','credit']
+              const DEBITO_KEYS  = ['debito','saida','debit','pagamento']
+              const findKey = (keys: string[], cs: string[]) =>
+                cs.find(c => keys.some(k => norm(c).includes(k)))
+
+              const dataKey    = findKey(DATA_KEYS, cols)
+              const valorKey   = findKey(VALOR_KEYS, cols)
+              const creditoKey = findKey(CREDITO_KEYS, cols)
+              const debitoKey  = findKey(DEBITO_KEYS, cols)
+              const descKey    = findKey(DESC_KEYS, cols)
+
+              if (!dataKey) {
+                setImportados([]); setParsendo(false)
+                toast.error(`Coluna de data não encontrada. Colunas: ${cols.slice(0,5).join(', ')}`)
+                return
+              }
+
+              for (const row of rows) {
+                const dataRaw = row[dataKey]?.trim()
+                if (!dataRaw) continue
+                const data = parseDataBR(dataRaw)
+                if (!data) continue
+
+                let valor = 0, tipo: 'credito' | 'debito' = 'debito'
+                if (creditoKey || debitoKey) {
+                  const vc = parseValorBR(creditoKey ? row[creditoKey] : '')
+                  const vd = parseValorBR(debitoKey  ? row[debitoKey]  : '')
+                  if (!isNaN(vc) && vc > 0) { valor = vc; tipo = 'credito' }
+                  else if (!isNaN(vd) && vd !== 0) { valor = Math.abs(vd); tipo = 'debito' }
+                  else continue
+                } else if (valorKey) {
+                  const v = parseValorBR(row[valorKey])
+                  if (isNaN(v) || v === 0) continue
+                  valor = Math.abs(v); tipo = v < 0 ? 'debito' : 'credito'
+                } else continue
+
+                let descricao = descKey ? row[descKey]?.trim() : ''
+                if (!descricao) descricao = cols
+                  .filter(c => c !== dataKey && c !== valorKey && c !== creditoKey && c !== debitoKey)
+                  .map(c => row[c]?.trim()).filter(Boolean).join(' ').slice(0, 80)
+                itens.push({ descricao: (descricao || 'Lancamento').slice(0, 80), valor, data, tipo })
+              }
+            } else {
+              // Sem cabeçalho: detecção por posição
+              const rows = result.data as string[][]
+              if (!rows.length) { setImportados([]); setParsendo(false); toast.error('Arquivo vazio.'); return }
+
+              const numCols = Math.max(...rows.map(r => r.length))
+              const dateColIdx = Array.from({length: numCols}, (_, i) => i)
+                .find(ci => rows.filter(r => isRowDate(r[ci])).length > rows.length * 0.5) ?? 0
+              const isNum = (s?: string) => !!s && s.trim() !== '' && !isNaN(parseValorBR(s)) && parseValorBR(s) !== 0
+              const numericCols = Array.from({length: numCols}, (_, i) => i)
+                .filter(ci => ci !== dateColIdx && rows.filter(r => isNum(r[ci])).length > rows.length * 0.4)
+              const hasNeg = (ci: number) => rows.some(r => (r[ci] ?? '').trim().startsWith('-'))
+              let valueColIdx = numericCols.find(ci => hasNeg(ci)) ?? numericCols[0] ?? -1
+              if (numericCols.length >= 2 && valueColIdx === numericCols[numericCols.length - 1])
+                valueColIdx = numericCols[numericCols.length - 2]
+              if (valueColIdx === -1) {
+                setImportados([]); setParsendo(false)
+                toast.error('Coluna de valor não detectada. Tente OFX/QFX.'); return
+              }
+              const descCols = Array.from({length: numCols}, (_, i) => i)
+                .filter(ci => ci !== dateColIdx && !numericCols.includes(ci))
+              for (const row of rows) {
+                const dataRaw = row[dateColIdx]?.trim()
+                if (!dataRaw) continue
+                const data = parseDataBR(dataRaw)
+                if (!data) continue
+                const v = parseValorBR(row[valueColIdx])
+                if (isNaN(v) || v === 0) continue
+                const valor = Math.abs(v)
+                const tipo: 'credito' | 'debito' = v < 0 ? 'debito' : 'credito'
+                const descricao = descCols.map(ci => row[ci]?.trim()).filter(Boolean).join(' ').slice(0, 80) || 'Lancamento'
+                itens.push({ descricao, valor, data, tipo })
+              }
+            }
+            finalize()
+          },
+          error: () => { setParsendo(false); toast.error('Erro ao ler o arquivo CSV') },
+        })
+      }
     }
     reader.onerror = () => { setParsendo(false); toast.error('Erro ao ler arquivo') }
-    reader.readAsText(file, 'UTF-8')
+    // ISO-8859-1 cobre Windows-1252, encoding mais comum nos bancos BR
+    reader.readAsText(file, 'ISO-8859-1')
   }
 
   const parsePDF = async (file: File) => {
@@ -832,6 +911,115 @@ export default function ConciliacaoPage() {
               </MobileCard>
             ))}
           </CardList>
+        </Card>
+      )}
+
+      {/* Lançamentos do sistema sem correspondência no extrato */}
+      {lancamentos.length > 0 && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileSpreadsheet className="w-4 h-4 text-blue-500" />
+                <CardTitle>Lancamentos sem extrato bancario</CardTitle>
+                <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-0.5 rounded-full">{lancamentos.length}</span>
+              </div>
+              <p className="text-xs text-slate-400 hidden sm:block">Registros do sistema ainda nao conciliados com o banco</p>
+            </div>
+          </CardHeader>
+
+          {/* Desktop */}
+          <TableWrapper>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100">
+                  <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 uppercase">Descricao</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Data</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Tipo</th>
+                  <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Valor</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Forma</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Conta</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase text-center">Acao</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {lancamentos.map(l => (
+                  <tr key={l.id} className="hover:bg-blue-50/40 transition-colors">
+                    <td className="px-6 py-3">
+                      <p className="font-semibold text-slate-800">{l.descricao}</p>
+                      {l.observacoes && <p className="text-xs text-slate-400 italic mt-0.5">{l.observacoes}</p>}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{formatDate(l.data)}</td>
+                    <td className="px-4 py-3">
+                      <Badge variant={l.tipo === 'entrada' ? 'success' : 'danger'}>
+                        {l.tipo === 'entrada' ? '↑ Entrada' : '↓ Saida'}
+                      </Badge>
+                    </td>
+                    <td className={`px-4 py-3 font-bold text-right whitespace-nowrap ${l.tipo === 'entrada' ? 'text-green-600' : 'text-red-600'}`}>
+                      {l.tipo === 'entrada' ? '+' : '-'}{formatCurrency(Number(l.valor))}
+                    </td>
+                    <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">{l.forma_pagamento ?? '—'}</td>
+                    <td className="px-4 py-3 text-slate-500 text-xs">{(l as any).contas_bancarias?.nome ?? '—'}</td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={async () => {
+                          await supabase.from('lancamentos').update({ conciliado: true }).eq('id', l.id)
+                          toast.success('Marcado como conciliado')
+                          load()
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-medium transition-colors flex items-center gap-1 mx-auto"
+                        title="Marcar como conciliado manualmente"
+                      >
+                        <CheckCircle size={12} /> Conciliar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableWrapper>
+
+          {/* Mobile */}
+          <CardList>
+            {lancamentos.map(l => (
+              <MobileCard key={l.id}>
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-slate-800 text-sm truncate">{l.descricao}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">{formatDate(l.data)}</p>
+                    {(l as any).contas_bancarias?.nome && (
+                      <p className="text-xs text-indigo-500">{(l as any).contas_bancarias.nome}</p>
+                    )}
+                  </div>
+                  <p className={`text-base font-bold flex-shrink-0 ${l.tipo === 'entrada' ? 'text-green-600' : 'text-red-600'}`}>
+                    {l.tipo === 'entrada' ? '+' : '-'}{formatCurrency(Number(l.valor))}
+                  </p>
+                </div>
+                <div className="flex items-center justify-between">
+                  <Badge variant={l.tipo === 'entrada' ? 'success' : 'danger'}>
+                    {l.tipo === 'entrada' ? '↑ Entrada' : '↓ Saida'}
+                  </Badge>
+                  <button
+                    onClick={async () => {
+                      await supabase.from('lancamentos').update({ conciliado: true }).eq('id', l.id)
+                      toast.success('Marcado como conciliado')
+                      load()
+                    }}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-600 text-xs font-medium"
+                  >
+                    <CheckCircle size={12} /> Conciliar
+                  </button>
+                </div>
+              </MobileCard>
+            ))}
+          </CardList>
+
+          <div className="px-6 py-3 bg-blue-50/50 border-t border-slate-100">
+            <p className="text-xs text-slate-500">
+              Estes lancamentos estao no sistema mas nao foram encontrados no extrato importado.
+              Importe o extrato do periodo ou marque como conciliado manualmente.
+            </p>
+          </div>
         </Card>
       )}
 

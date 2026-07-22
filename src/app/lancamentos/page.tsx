@@ -12,7 +12,10 @@ import { Modal } from '@/components/ui/modal'
 import { TableWrapper, CardList, MobileCard } from '@/components/ui/table-mobile'
 import { CurrencyInput } from '@/components/ui/currency-input'
 import { toast } from 'sonner'
-import { Plus, Search, Trash2, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react'
+import {
+  Plus, Search, Trash2, TrendingUp, TrendingDown,
+  RefreshCw, Pencil, FileDown, ArrowUpDown,
+} from 'lucide-react'
 import type { Lancamento, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
 import { format, startOfMonth, endOfMonth } from 'date-fns'
 
@@ -31,7 +34,8 @@ interface FormData {
 
 const emptyForm: FormData = {
   descricao: '', valor: '', tipo: 'saida', data: format(new Date(), 'yyyy-MM-dd'),
-  centro_custo_id: '', categoria_id: '', conta_bancaria_id: '', forma_pagamento: 'dinheiro', conciliado: false, observacoes: '',
+  centro_custo_id: '', categoria_id: '', conta_bancaria_id: '', forma_pagamento: 'transferencia',
+  conciliado: false, observacoes: '',
 }
 
 export default function LancamentosPage() {
@@ -41,6 +45,7 @@ export default function LancamentosPage() {
   const [contas, setContas] = useState<ContaBancaria[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
+  const [editando, setEditando] = useState<Lancamento | null>(null)
   const [form, setForm] = useState<FormData>(emptyForm)
   const [saving, setSaving] = useState(false)
   const [busca, setBusca] = useState('')
@@ -49,8 +54,6 @@ export default function LancamentosPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    // Usa new Date(ano, mes-1, 1) para criar data em horário LOCAL
-    // Evita bug de UTC: new Date('2026-05-01') vira abril no Brasil (UTC-3)
     const [ano, mes] = mesFiltro.split('-').map(Number)
     const mesDate = new Date(ano, mes - 1, 1)
     const [ini, fim] = [
@@ -58,7 +61,8 @@ export default function LancamentosPage() {
       format(endOfMonth(mesDate), 'yyyy-MM-dd'),
     ]
     const [l, cc, cat, cb] = await Promise.all([
-      supabase.from('lancamentos').select('*, centros_custo(*), categorias(*), contas_bancarias(*)')
+      supabase.from('lancamentos')
+        .select('*, centros_custo(*), categorias(*), contas_bancarias(*)')
         .gte('data', ini).lte('data', fim).order('data', { ascending: false }),
       supabase.from('centros_custo').select('*').eq('ativo', true).order('nome'),
       supabase.from('categorias').select('*').order('tipo').order('nome'),
@@ -74,7 +78,25 @@ export default function LancamentosPage() {
   useEffect(() => { load() }, [load])
 
   const abrirNovo = (tipo?: 'entrada' | 'saida') => {
+    setEditando(null)
     setForm({ ...emptyForm, tipo: tipo ?? 'saida' })
+    setModalOpen(true)
+  }
+
+  const abrirEditar = (l: Lancamento) => {
+    setEditando(l)
+    setForm({
+      descricao: l.descricao,
+      valor: String(l.valor),
+      tipo: l.tipo,
+      data: l.data,
+      centro_custo_id: l.centro_custo_id ?? '',
+      categoria_id: l.categoria_id ?? '',
+      conta_bancaria_id: l.conta_bancaria_id ?? '',
+      forma_pagamento: l.forma_pagamento ?? 'transferencia',
+      conciliado: l.conciliado,
+      observacoes: l.observacoes ?? '',
+    })
     setModalOpen(true)
   }
 
@@ -83,7 +105,8 @@ export default function LancamentosPage() {
     if (!form.valor || parseFloat(form.valor) <= 0) { toast.error('Informe um valor maior que zero'); return }
     if (!form.data) { toast.error('Informe a data'); return }
     setSaving(true)
-    const { error } = await supabase.from('lancamentos').insert({
+
+    const payload = {
       descricao: form.descricao,
       valor: parseFloat(form.valor),
       tipo: form.tipo,
@@ -94,18 +117,88 @@ export default function LancamentosPage() {
       forma_pagamento: form.forma_pagamento,
       conciliado: form.conciliado,
       observacoes: form.observacoes || null,
-    })
+    }
+
+    const { error } = editando
+      ? await supabase.from('lancamentos').update(payload).eq('id', editando.id)
+      : await supabase.from('lancamentos').insert(payload)
+
     setSaving(false)
-    if (error) { toast.error(`Erro ao salvar: ${error.message}`); return }
-    toast.success(form.tipo === 'entrada' ? '✅ Entrada registrada no caixa!' : '✅ Saida registrada no caixa!')
+    if (error) { toast.error(`Erro: ${error.message}`); return }
+    toast.success(editando ? 'Lancamento atualizado!' : (form.tipo === 'entrada' ? 'Entrada registrada!' : 'Saida registrada!'))
     setModalOpen(false)
     load()
   }
 
   const excluir = async (id: string) => {
+    if (!confirm('Excluir este lancamento?')) return
     await supabase.from('lancamentos').delete().eq('id', id)
     toast.success('Lancamento excluido')
     load()
+  }
+
+  const exportarPDF = () => {
+    const [ano, mes] = mesFiltro.split('-').map(Number)
+    const mesNome = new Date(ano, mes - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+
+    const linhas = filtrados.map(l => `
+      <tr>
+        <td>${l.descricao}</td>
+        <td>${formatDate(l.data)}</td>
+        <td style="color:${l.tipo === 'entrada' ? '#16a34a' : '#dc2626'}">${l.tipo === 'entrada' ? 'Entrada' : 'Saida'}</td>
+        <td style="text-align:right;font-weight:600;color:${l.tipo === 'entrada' ? '#16a34a' : '#dc2626'}">
+          ${l.tipo === 'entrada' ? '+' : '-'}${formatCurrency(Number(l.valor))}
+        </td>
+        <td>${getFormaPagamentoLabel(l.forma_pagamento)}</td>
+        <td>${(l as any).contas_bancarias?.nome ?? '—'}</td>
+        <td>${(l as any).categorias?.nome ?? '—'}</td>
+        <td style="color:${l.conciliado ? '#16a34a' : '#64748b'}">${l.conciliado ? 'Sim' : 'Nao'}</td>
+      </tr>
+    `).join('')
+
+    const html = `
+      <!DOCTYPE html><html lang="pt-BR"><head>
+      <meta charset="UTF-8"><title>Lancamentos – ${mesNome}</title>
+      <style>
+        body { font-family: Arial, sans-serif; font-size: 11px; color: #1e293b; margin: 24px; }
+        h1 { font-size: 18px; margin-bottom: 4px; }
+        .sub { color: #64748b; font-size: 11px; margin-bottom: 16px; }
+        .resumo { display: flex; gap: 24px; margin-bottom: 16px; }
+        .resumo div { padding: 8px 16px; border-radius: 6px; }
+        .ent { background: #f0fdf4; color: #16a34a; font-weight: 600; }
+        .sai { background: #fef2f2; color: #dc2626; font-weight: 600; }
+        .sal { background: #eef2ff; color: #4f46e5; font-weight: 600; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #f8fafc; text-align: left; padding: 6px 8px; font-size: 10px;
+             text-transform: uppercase; letter-spacing: .05em; color: #64748b;
+             border-bottom: 2px solid #e2e8f0; }
+        td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; }
+        tr:hover td { background: #f8fafc; }
+        .footer { margin-top: 16px; font-size: 10px; color: #94a3b8; }
+      </style></head><body>
+      <h1>Relatorio de Lancamentos</h1>
+      <p class="sub">${mesNome} &bull; Gerado em ${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+      <div class="resumo">
+        <div class="ent">Entradas: ${formatCurrency(totalEntradas)}</div>
+        <div class="sai">Saidas: ${formatCurrency(totalSaidas)}</div>
+        <div class="sal">Saldo: ${formatCurrency(saldo)}</div>
+      </div>
+      <table>
+        <thead><tr>
+          <th>Descricao</th><th>Data</th><th>Tipo</th><th style="text-align:right">Valor</th>
+          <th>Forma</th><th>Conta</th><th>Categoria</th><th>Conciliado</th>
+        </tr></thead>
+        <tbody>${linhas}</tbody>
+      </table>
+      <p class="footer">Total: ${filtrados.length} lancamento(s)</p>
+      </body></html>
+    `
+    const win = window.open('', '_blank')
+    if (!win) { toast.error('Permita popups para exportar PDF'); return }
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+    setTimeout(() => { win.print() }, 400)
   }
 
   const filtrados = lancamentos.filter(l => {
@@ -115,8 +208,8 @@ export default function LancamentosPage() {
   })
 
   const totalEntradas = filtrados.filter(l => l.tipo === 'entrada').reduce((s, l) => s + Number(l.valor), 0)
-  const totalSaidas = filtrados.filter(l => l.tipo === 'saida').reduce((s, l) => s + Number(l.valor), 0)
-  const saldo = totalEntradas - totalSaidas
+  const totalSaidas   = filtrados.filter(l => l.tipo === 'saida').reduce((s, l) => s + Number(l.valor), 0)
+  const saldo         = totalEntradas - totalSaidas
 
   const categoriasForm = form.tipo === 'entrada'
     ? categorias.filter(c => c.tipo === 'entrada')
@@ -130,11 +223,14 @@ export default function LancamentosPage() {
           <h1 className="text-xl md:text-2xl font-bold text-slate-800">Lancamentos</h1>
           <p className="text-sm text-slate-500 mt-0.5">Entradas e saidas de caixa</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="success" onClick={() => abrirNovo('entrada')} className="flex-1 sm:flex-none">
+        <div className="flex gap-2 flex-wrap justify-end">
+          <Button variant="secondary" onClick={exportarPDF} title="Exportar PDF">
+            <FileDown size={15} /> <span className="hidden sm:inline">Exportar PDF</span>
+          </Button>
+          <Button variant="success" onClick={() => abrirNovo('entrada')}>
             <TrendingUp size={16} /> Entrada
           </Button>
-          <Button variant="danger" onClick={() => abrirNovo('saida')} className="flex-1 sm:flex-none">
+          <Button variant="danger" onClick={() => abrirNovo('saida')}>
             <TrendingDown size={16} /> Saida
           </Button>
         </div>
@@ -176,7 +272,7 @@ export default function LancamentosPage() {
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-                placeholder="Buscar..."
+                placeholder="Buscar descricao..."
                 value={busca}
                 onChange={e => setBusca(e.target.value)}
               />
@@ -201,7 +297,7 @@ export default function LancamentosPage() {
 
       {/* Lista */}
       <Card>
-        {/* Desktop: tabela */}
+        {/* Desktop */}
         <TableWrapper>
           <table className="w-full text-sm">
             <thead>
@@ -209,49 +305,72 @@ export default function LancamentosPage() {
                 <th className="text-left px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Descricao</th>
                 <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Data</th>
                 <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Tipo</th>
-                <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Valor</th>
+                <th className="text-right px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Valor</th>
                 <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Forma</th>
                 <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Conta</th>
                 <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Categoria</th>
                 <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Conciliado</th>
-                <th className="px-4 py-4" />
+                <th className="px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide text-right">Acoes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {loading ? (
-                <tr><td colSpan={8} className="text-center py-12 text-slate-400">Carregando...</td></tr>
+                <tr><td colSpan={9} className="text-center py-12 text-slate-400">Carregando...</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={8} className="text-center py-12 text-slate-400">Nenhum lancamento encontrado</td></tr>
-              ) : filtrados.map(l => (
-                <tr key={l.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-6 py-4">
-                    <p className="font-medium text-slate-800">{l.descricao}</p>
-                    {(l as any).centros_custo && <p className="text-xs text-slate-400">{(l as any).centros_custo.nome}</p>}
+                <tr>
+                  <td colSpan={9} className="text-center py-12">
+                    <ArrowUpDown className="w-8 h-8 text-slate-200 mx-auto mb-3" />
+                    <p className="text-slate-400 font-medium">Nenhum lancamento em {mesFiltro}</p>
+                    <p className="text-slate-400 text-xs mt-1">Use os botoes Entrada ou Saida para registrar</p>
                   </td>
-                  <td className="px-4 py-4 text-slate-600">{formatDate(l.data)}</td>
-                  <td className="px-4 py-4">
+                </tr>
+              ) : filtrados.map(l => (
+                <tr key={l.id} className="hover:bg-slate-50/80 transition-colors group">
+                  <td className="px-6 py-3">
+                    <p className="font-semibold text-slate-800 leading-tight">{l.descricao}</p>
+                    <div className="flex gap-2 mt-0.5">
+                      {(l as any).centros_custo && (
+                        <p className="text-xs text-slate-400">{(l as any).centros_custo.nome}</p>
+                      )}
+                      {l.observacoes && (
+                        <p className="text-xs text-slate-400 italic truncate max-w-[200px]">{l.observacoes}</p>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{formatDate(l.data)}</td>
+                  <td className="px-4 py-3">
                     <Badge variant={l.tipo === 'entrada' ? 'success' : 'danger'}>
                       {l.tipo === 'entrada' ? '↑ Entrada' : '↓ Saida'}
                     </Badge>
                   </td>
-                  <td className={`px-4 py-4 font-semibold ${l.tipo === 'entrada' ? 'text-green-600' : 'text-red-600'}`}>
+                  <td className={`px-4 py-3 font-bold text-right whitespace-nowrap ${l.tipo === 'entrada' ? 'text-green-600' : 'text-red-600'}`}>
                     {l.tipo === 'entrada' ? '+' : '-'}{formatCurrency(Number(l.valor))}
                   </td>
-                  <td className="px-4 py-4 text-slate-600">{getFormaPagamentoLabel(l.forma_pagamento)}</td>
-                  <td className="px-4 py-4 text-slate-600">{(l as any).contas_bancarias?.nome ?? '—'}</td>
-                  <td className="px-4 py-4 text-slate-600">{(l as any).categorias?.nome ?? '—'}</td>
-                  <td className="px-4 py-4">
+                  <td className="px-4 py-3 text-slate-600 text-xs whitespace-nowrap">{getFormaPagamentoLabel(l.forma_pagamento)}</td>
+                  <td className="px-4 py-3 text-slate-600 text-xs whitespace-nowrap">{(l as any).contas_bancarias?.nome ?? '—'}</td>
+                  <td className="px-4 py-3 text-slate-600 text-xs">{(l as any).categorias?.nome ?? '—'}</td>
+                  <td className="px-4 py-3">
                     <Badge variant={l.conciliado ? 'success' : 'neutral'}>
                       {l.conciliado ? 'Sim' : 'Nao'}
                     </Badge>
                   </td>
-                  <td className="px-4 py-4">
-                    <button
-                      onClick={() => excluir(l.id)}
-                      className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => abrirEditar(l)}
+                        className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-400 hover:text-indigo-600 transition-colors"
+                        title="Editar"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        onClick={() => excluir(l.id)}
+                        className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors"
+                        title="Excluir"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -259,7 +378,7 @@ export default function LancamentosPage() {
           </table>
         </TableWrapper>
 
-        {/* Mobile: cards */}
+        {/* Mobile */}
         <CardList>
           {loading ? (
             <MobileCard><p className="text-center text-slate-400 py-8">Carregando...</p></MobileCard>
@@ -274,14 +393,14 @@ export default function LancamentosPage() {
                     <p className="text-xs text-slate-400">{(l as any).centros_custo.nome}</p>
                   )}
                 </div>
-                <div className="flex items-center gap-1.5 flex-shrink-0">
+                <div className="flex items-center gap-1 flex-shrink-0">
                   <Badge variant={l.tipo === 'entrada' ? 'success' : 'danger'}>
                     {l.tipo === 'entrada' ? '↑' : '↓'}
                   </Badge>
-                  <button
-                    onClick={() => excluir(l.id)}
-                    className="p-1.5 rounded-lg hover:bg-red-50 text-red-400"
-                  >
+                  <button onClick={() => abrirEditar(l)} className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-400">
+                    <Pencil size={13} />
+                  </button>
+                  <button onClick={() => excluir(l.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400">
                     <Trash2 size={13} />
                   </button>
                 </div>
@@ -306,35 +425,68 @@ export default function LancamentosPage() {
             </MobileCard>
           ))}
         </CardList>
+
+        {filtrados.length > 0 && (
+          <div className="px-6 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>{filtrados.length} registro(s)</span>
+            <span className="font-medium">
+              Saldo do periodo: <span className={saldo >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>{formatCurrency(saldo)}</span>
+            </span>
+          </div>
+        )}
       </Card>
 
-      {/* Modal */}
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Novo Lancamento" size="md">
+      {/* Modal criar / editar */}
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={editando ? 'Editar Lancamento' : 'Novo Lancamento'}
+        size="md"
+      >
         <div className="space-y-4">
-          <div className="flex bg-slate-100 rounded-xl p-1">
-            <button
-              onClick={() => setForm(f => ({ ...f, tipo: 'entrada' }))}
-              className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
-                form.tipo === 'entrada' ? 'bg-green-600 text-white shadow-sm' : 'text-slate-600'
-              }`}
-            >
-              <TrendingUp size={14} /> Entrada
-            </button>
-            <button
-              onClick={() => setForm(f => ({ ...f, tipo: 'saida' }))}
-              className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
-                form.tipo === 'saida' ? 'bg-red-600 text-white shadow-sm' : 'text-slate-600'
-              }`}
-            >
-              <TrendingDown size={14} /> Saida
-            </button>
-          </div>
+          {/* Tipo: toggle só aparece na criação — editar mantém o tipo */}
+          {!editando && (
+            <div className="flex bg-slate-100 rounded-xl p-1">
+              <button
+                onClick={() => setForm(f => ({ ...f, tipo: 'entrada', categoria_id: '' }))}
+                className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+                  form.tipo === 'entrada' ? 'bg-green-600 text-white shadow-sm' : 'text-slate-600'
+                }`}
+              >
+                <TrendingUp size={14} /> Entrada
+              </button>
+              <button
+                onClick={() => setForm(f => ({ ...f, tipo: 'saida', categoria_id: '' }))}
+                className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+                  form.tipo === 'saida' ? 'bg-red-600 text-white shadow-sm' : 'text-slate-600'
+                }`}
+              >
+                <TrendingDown size={14} /> Saida
+              </button>
+            </div>
+          )}
 
-          <Input label="Descricao *" placeholder="Ex: Venda do dia, Pagamento fornecedor..." value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))} />
+          {editando && (
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium ${
+              form.tipo === 'entrada' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+            }`}>
+              {form.tipo === 'entrada' ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+              {form.tipo === 'entrada' ? 'Entrada de caixa' : 'Saida de caixa'}
+            </div>
+          )}
+
+          <Input
+            label="Descricao *"
+            placeholder="Ex: Venda do dia, Pagamento fornecedor..."
+            value={form.descricao}
+            onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))}
+          />
+
           <div className="grid grid-cols-2 gap-4">
             <CurrencyInput label="Valor *" value={form.valor} onChange={e => setForm(f => ({ ...f, valor: e.target.value }))} />
             <Input label="Data *" type="date" value={form.data} onChange={e => setForm(f => ({ ...f, data: e.target.value }))} />
           </div>
+
           <div className="grid grid-cols-2 gap-4">
             <Select label="Forma de Pagamento" value={form.forma_pagamento} onChange={e => setForm(f => ({ ...f, forma_pagamento: e.target.value }))}>
               <option value="dinheiro">Dinheiro</option>
@@ -343,31 +495,50 @@ export default function LancamentosPage() {
               <option value="cartao_credito">Cartao Credito</option>
               <option value="transferencia">Transferencia</option>
               <option value="boleto">Boleto</option>
-            </Select>
-            <Select label="Centro de Custo" value={form.centro_custo_id} onChange={e => setForm(f => ({ ...f, centro_custo_id: e.target.value }))}>
-              <option value="">Sem centro de custo</option>
-              {centros.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-            </Select>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <Select label="Categoria" value={form.categoria_id} onChange={e => setForm(f => ({ ...f, categoria_id: e.target.value }))}>
-              <option value="">Sem categoria</option>
-              {categoriasForm.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+              <option value="cheque">Cheque</option>
             </Select>
             <Select label="Conta Bancaria" value={form.conta_bancaria_id} onChange={e => setForm(f => ({ ...f, conta_bancaria_id: e.target.value }))}>
               <option value="">Sem conta especifica</option>
               {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
             </Select>
           </div>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={form.conciliado} onChange={e => setForm(f => ({ ...f, conciliado: e.target.checked }))} className="w-4 h-4 accent-indigo-600" />
-            <span className="text-sm text-slate-600">Ja conciliado com extrato</span>
-          </label>
-          <Input label="Observacoes" placeholder="Opcional..." value={form.observacoes} onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))} />
+
+          <div className="grid grid-cols-2 gap-4">
+            <Select label="Centro de Custo" value={form.centro_custo_id} onChange={e => setForm(f => ({ ...f, centro_custo_id: e.target.value }))}>
+              <option value="">Sem centro de custo</option>
+              {centros.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </Select>
+            <Select label="Categoria" value={form.categoria_id} onChange={e => setForm(f => ({ ...f, categoria_id: e.target.value }))}>
+              <option value="">Sem categoria</option>
+              {categoriasForm.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.conciliado}
+                onChange={e => setForm(f => ({ ...f, conciliado: e.target.checked }))}
+                className="w-4 h-4 accent-indigo-600"
+              />
+              <span className="text-sm text-slate-600">Ja conciliado com extrato bancario</span>
+            </label>
+          </div>
+
+          <Input
+            label="Observacoes"
+            placeholder="Referencia, nota fiscal, detalhes..."
+            value={form.observacoes}
+            onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))}
+          />
         </div>
+
         <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-100">
           <Button variant="secondary" onClick={() => setModalOpen(false)}>Cancelar</Button>
-          <Button onClick={salvar} disabled={saving}>{saving ? 'Salvando...' : 'Registrar Lancamento'}</Button>
+          <Button onClick={salvar} disabled={saving}>
+            {saving ? 'Salvando...' : editando ? 'Salvar Alteracoes' : 'Registrar Lancamento'}
+          </Button>
         </div>
       </Modal>
     </div>
