@@ -246,12 +246,15 @@ export default function ConciliacaoPage() {
 
       // Extrai texto preservando posição (linhas separadas por \n)
       let textoCompleto = ''
+      let totalItens = 0
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i)
         const content = await page.getTextContent()
+        totalItens += content.items.length
         // Agrupa por linha usando posição Y
         const itemsPorY: Record<number, string[]> = {}
         for (const item of content.items as any[]) {
+          if (!item.str?.trim()) continue
           const y = Math.round(item.transform?.[5] ?? 0)
           if (!itemsPorY[y]) itemsPorY[y] = []
           itemsPorY[y].push(item.str)
@@ -261,6 +264,16 @@ export default function ConciliacaoPage() {
           .sort((a, b) => b - a)
           .map(y => itemsPorY[y].join(' '))
         textoCompleto += linhasOrdenadas.join('\n') + '\n'
+      }
+
+      // PDF escaneado: nenhum item de texto encontrado
+      if (totalItens === 0) {
+        setParsendo(false)
+        toast.error(
+          'Este PDF usa imagens (escaneado). Não é possível ler o texto automaticamente. ' +
+          'Use OFX/QFX ou CSV exportado pelo app do banco.'
+        )
+        return
       }
 
       const linhas = textoCompleto.split('\n').map(l => l.trim()).filter(Boolean)
@@ -363,8 +376,8 @@ export default function ConciliacaoPage() {
       setParsendo(false)
       if (unicos.length === 0) {
         toast.warning(
-          `Nao encontramos lancamentos neste PDF (${linhas.length} linhas lidas). ` +
-          'O PDF pode usar imagens ou ter formato diferente. Exporte como CSV pelo app do banco.'
+          `PDF tem texto (${linhas.length} linhas), mas não reconhecemos o formato do extrato. ` +
+          'Tente exportar como OFX/QFX ou CSV pelo app do banco.'
         )
       } else {
         toast.success(`${unicos.length} lancamentos encontrados no PDF!`)
