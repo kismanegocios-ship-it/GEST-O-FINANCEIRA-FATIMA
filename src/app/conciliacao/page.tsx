@@ -14,9 +14,9 @@ import { toast } from 'sonner'
 import { Select } from '@/components/ui/select'
 import {
   Plus, Link2, CheckCircle, Trash2, AlertCircle,
-  Upload, FileText, X, RefreshCw, FileSpreadsheet, Building2
+  Upload, FileText, X, RefreshCw, FileSpreadsheet, Building2, RotateCcw
 } from 'lucide-react'
-import type { ExtratoManual, Lancamento, ContaBancaria } from '@/lib/types'
+import type { ExtratoManual, Lancamento, ContaBancaria, Categoria, CentroCusto } from '@/lib/types'
 import { format } from 'date-fns'
 import Papa from 'papaparse'
 
@@ -50,23 +50,34 @@ export default function ConciliacaoPage() {
   const [modalConciliar, setModalConciliar] = useState<ExtratoManual | null>(null)
   const [form, setForm] = useState<FormExtrato>(emptyForm)
   const [saving, setSaving] = useState(false)
-  const [lancamentoSelecionado, setLancamentoSelecionado] = useState('')
   const [importados, setImportados] = useState<ExtratoImportado[]>([])
   const [parsendo, setParsendo] = useState(false)
   const [salvandoImport, setSalvandoImport] = useState(false)
   const [importContaId, setImportContaId] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  const [categorias, setCategorias] = useState<Categoria[]>([])
+  const [centros, setCentros] = useState<CentroCusto[]>([])
+  const [selecionados, setSelecionados] = useState<Set<string>>(new Set())
+  const [modoConciliar, setModoConciliar] = useState<'criar' | 'vincular'>('criar')
+  const [formConciliar, setFormConciliar] = useState({
+    lancamentoId: '', descricao: '', categoria_id: '',
+    centro_custo_id: '', conta_bancaria_id: '', forma_pagamento: '', observacoes: '',
+  })
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [ext, lanc, cb] = await Promise.all([
+    const [ext, lanc, cb, cats, ccs] = await Promise.all([
       supabase.from('extrato_manual').select('*, lancamentos(*), contas_bancarias(*)').order('data', { ascending: false }),
       supabase.from('lancamentos').select('*').eq('conciliado', false).order('data', { ascending: false }),
       supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome'),
+      supabase.from('categorias').select('*').order('nome'),
+      supabase.from('centros_custo').select('*').eq('ativo', true).order('nome'),
     ])
     setExtratos((ext.data ?? []) as ExtratoManual[])
     setLancamentos((lanc.data ?? []) as Lancamento[])
     setContas((cb.data ?? []) as ContaBancaria[])
+    setCategorias((cats.data ?? []) as Categoria[])
+    setCentros((ccs.data ?? []) as CentroCusto[])
     setLoading(false)
   }, [])
 
@@ -627,22 +638,106 @@ export default function ConciliacaoPage() {
   }
 
   const conciliar = async () => {
-    if (!modalConciliar || !lancamentoSelecionado) { toast.error('Selecione um lancamento'); return }
+    if (!modalConciliar) return
     setSaving(true)
-    await Promise.all([
-      supabase.from('extrato_manual').update({ conciliado: true, lancamento_id: lancamentoSelecionado }).eq('id', modalConciliar.id),
-      supabase.from('lancamentos').update({ conciliado: true }).eq('id', lancamentoSelecionado),
-    ])
+
+    if (modoConciliar === 'vincular') {
+      if (!formConciliar.lancamentoId) { setSaving(false); toast.error('Selecione um lancamento'); return }
+      await Promise.all([
+        supabase.from('extrato_manual').update({ conciliado: true, lancamento_id: formConciliar.lancamentoId }).eq('id', modalConciliar.id),
+        supabase.from('lancamentos').update({ conciliado: true }).eq('id', formConciliar.lancamentoId),
+      ])
+    } else {
+      // Cria novo lancamento com os dados do extrato + form
+      const tipo: 'entrada' | 'saida' = modalConciliar.tipo === 'credito' ? 'entrada' : 'saida'
+      const { data: novoLanc, error } = await supabase.from('lancamentos').insert({
+        descricao: formConciliar.descricao.trim() || modalConciliar.descricao,
+        valor: Number(modalConciliar.valor),
+        tipo,
+        data: modalConciliar.data,
+        categoria_id:    formConciliar.categoria_id    || null,
+        centro_custo_id: formConciliar.centro_custo_id || null,
+        conta_bancaria_id: formConciliar.conta_bancaria_id || (modalConciliar as any).conta_bancaria_id || null,
+        forma_pagamento: formConciliar.forma_pagamento || '',
+        observacoes:     formConciliar.observacoes     || null,
+        conciliado: true,
+      }).select().single()
+
+      if (error || !novoLanc) {
+        setSaving(false)
+        toast.error('Erro ao criar lancamento: ' + (error?.message ?? 'desconhecido'))
+        return
+      }
+      await supabase.from('extrato_manual').update({ conciliado: true, lancamento_id: novoLanc.id }).eq('id', modalConciliar.id)
+    }
+
     setSaving(false)
-    toast.success('Conciliado!')
+    toast.success('Conciliado com sucesso!')
     setModalConciliar(null)
-    setLancamentoSelecionado('')
     load()
+  }
+
+  const excluirSelecionados = async () => {
+    if (selecionados.size === 0) return
+    if (!confirm(`Excluir ${selecionados.size} lancamento(s) do extrato?`)) return
+    await supabase.from('extrato_manual').delete().in('id', Array.from(selecionados))
+    toast.success(`${selecionados.size} lancamento(s) removidos`)
+    setSelecionados(new Set())
+    load()
+  }
+
+  const excluirTodosPendentes = async (lista: ExtratoManual[]) => {
+    if (lista.length === 0) return
+    if (!confirm(`Apagar TODOS os ${lista.length} lancamentos pendentes? Isso nao pode ser desfeito.`)) return
+    const ids = lista.map(e => e.id)
+    await supabase.from('extrato_manual').delete().in('id', ids)
+    toast.success(`${ids.length} lancamentos removidos`)
+    setSelecionados(new Set())
+    load()
+  }
+
+  const toggleSelecao = (id: string) => {
+    setSelecionados(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const toggleTodos = (lista: ExtratoManual[]) => {
+    const todosIds = lista.map(e => e.id)
+    const todosSelecionados = todosIds.every(id => selecionados.has(id))
+    setSelecionados(todosSelecionados ? new Set() : new Set(todosIds))
+  }
+
+  const abrirConciliar = (e: ExtratoManual) => {
+    setModalConciliar(e)
+    setModoConciliar('criar')
+    setFormConciliar({
+      lancamentoId: '',
+      descricao: e.descricao,
+      categoria_id: '',
+      centro_custo_id: '',
+      conta_bancaria_id: (e as any).conta_bancaria_id ?? '',
+      forma_pagamento: '',
+      observacoes: '',
+    })
   }
 
   const excluir = async (id: string) => {
     await supabase.from('extrato_manual').delete().eq('id', id)
     toast.success('Removido')
+    load()
+  }
+
+  const estornar = async (e: ExtratoManual) => {
+    if (!confirm('Estornar esta conciliacao? O extrato voltara para pendente e o lancamento vinculado voltara para nao conciliado.')) return
+    await supabase.from('extrato_manual').update({ conciliado: false, lancamento_id: null }).eq('id', e.id)
+    const lancId = (e as any).lancamentos?.id
+    if (lancId) {
+      await supabase.from('lancamentos').update({ conciliado: false }).eq('id', lancId)
+    }
+    toast.success('Conciliacao estornada com sucesso')
     load()
   }
 
@@ -724,10 +819,34 @@ export default function ConciliacaoPage() {
       {/* Pendentes */}
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-orange-500" />
-            <CardTitle>Pendentes de Conciliacao</CardTitle>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-orange-500" />
+              <CardTitle>Pendentes de Conciliacao</CardTitle>
+              {pendentes.length > 0 && (
+                <span className="bg-orange-100 text-orange-700 text-xs font-bold px-2 py-0.5 rounded-full">{pendentes.length}</span>
+              )}
+            </div>
+            {pendentes.length > 0 && (
+              <button
+                onClick={() => excluirTodosPendentes(pendentes)}
+                className="flex items-center gap-1 text-xs text-red-400 hover:text-red-600 transition-colors px-2 py-1 rounded-lg hover:bg-red-50"
+              >
+                <Trash2 size={12} /> Apagar todos pendentes
+              </button>
+            )}
           </div>
+          {selecionados.size > 0 && (
+            <div className="mt-3 bg-red-50 border border-red-100 rounded-xl px-4 py-2.5 flex items-center justify-between">
+              <p className="text-sm font-medium text-red-700">{selecionados.size} selecionado(s)</p>
+              <button
+                onClick={excluirSelecionados}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors"
+              >
+                <Trash2 size={12} /> Excluir selecionados
+              </button>
+            </div>
+          )}
         </CardHeader>
 
         {/* Desktop */}
@@ -735,7 +854,17 @@ export default function ConciliacaoPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100">
-                <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 uppercase">Descricao</th>
+                <th className="px-4 py-3 w-10">
+                  {pendentes.length > 0 && (
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 accent-indigo-600 cursor-pointer"
+                      checked={pendentes.length > 0 && pendentes.every(e => selecionados.has(e.id))}
+                      onChange={() => toggleTodos(pendentes)}
+                    />
+                  )}
+                </th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Descricao</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Data</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Tipo</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Valor</th>
@@ -744,17 +873,25 @@ export default function ConciliacaoPage() {
             </thead>
             <tbody className="divide-y divide-slate-50">
               {loading ? (
-                <tr><td colSpan={5} className="text-center py-8 text-slate-400">Carregando...</td></tr>
+                <tr><td colSpan={6} className="text-center py-8 text-slate-400">Carregando...</td></tr>
               ) : pendentes.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="text-center py-8">
+                  <td colSpan={6} className="text-center py-8">
                     <CheckCircle className="w-8 h-8 text-green-400 mx-auto mb-2" />
                     <p className="text-slate-400 text-sm">Tudo conciliado!</p>
                   </td>
                 </tr>
               ) : pendentes.map(e => (
-                <tr key={e.id} className="hover:bg-slate-50">
-                  <td className="px-6 py-3">
+                <tr key={e.id} className={`hover:bg-slate-50 transition-colors ${selecionados.has(e.id) ? 'bg-red-50/40' : ''}`}>
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 accent-indigo-600 cursor-pointer"
+                      checked={selecionados.has(e.id)}
+                      onChange={() => toggleSelecao(e.id)}
+                    />
+                  </td>
+                  <td className="px-4 py-3">
                     <p className="font-medium text-slate-800">{e.descricao}</p>
                     {(e as any).contas_bancarias?.nome && (
                       <p className="text-xs text-indigo-500 mt-0.5">{(e as any).contas_bancarias.nome}</p>
@@ -772,7 +909,7 @@ export default function ConciliacaoPage() {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
                       <button
-                        onClick={() => { setModalConciliar(e); setLancamentoSelecionado('') }}
+                        onClick={() => abrirConciliar(e)}
                         className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500 transition-colors"
                         title="Conciliar"
                       >
@@ -805,37 +942,45 @@ export default function ConciliacaoPage() {
             </MobileCard>
           ) : pendentes.map(e => (
             <MobileCard key={e.id}>
-              <div className="flex items-start justify-between gap-2">
+              <div className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-indigo-600 cursor-pointer mt-1 flex-shrink-0"
+                  checked={selecionados.has(e.id)}
+                  onChange={() => toggleSelecao(e.id)}
+                />
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-slate-800 text-sm truncate">{e.descricao}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{formatDate(e.data)}</p>
-                  {(e as any).contas_bancarias?.nome && (
-                    <p className="text-xs text-indigo-500">{(e as any).contas_bancarias.nome}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 flex-shrink-0">
-                  <p className={`text-sm font-bold ${e.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
-                    {formatCurrency(Number(e.valor))}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center justify-between mt-2">
-                <Badge variant={e.tipo === 'credito' ? 'success' : 'danger'}>
-                  {e.tipo === 'credito' ? 'Credito' : 'Debito'}
-                </Badge>
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => { setModalConciliar(e); setLancamentoSelecionado('') }}
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-600 text-xs font-medium"
-                  >
-                    <Link2 size={12} /> Conciliar
-                  </button>
-                  <button
-                    onClick={() => excluir(e.id)}
-                    className="p-1.5 rounded-lg hover:bg-red-50 text-red-400"
-                  >
-                    <Trash2 size={13} />
-                  </button>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-slate-800 text-sm truncate">{e.descricao}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">{formatDate(e.data)}</p>
+                      {(e as any).contas_bancarias?.nome && (
+                        <p className="text-xs text-indigo-500">{(e as any).contas_bancarias.nome}</p>
+                      )}
+                    </div>
+                    <p className={`text-sm font-bold flex-shrink-0 ${e.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
+                      {formatCurrency(Number(e.valor))}
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-between mt-2">
+                    <Badge variant={e.tipo === 'credito' ? 'success' : 'danger'}>
+                      {e.tipo === 'credito' ? 'Credito' : 'Debito'}
+                    </Badge>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => abrirConciliar(e)}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-600 text-xs font-medium"
+                      >
+                        <Link2 size={12} /> Conciliar
+                      </button>
+                      <button
+                        onClick={() => excluir(e.id)}
+                        className="p-1.5 rounded-lg hover:bg-red-50 text-red-400"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </MobileCard>
@@ -863,6 +1008,7 @@ export default function ConciliacaoPage() {
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Tipo</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Valor</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Lancamento vinculado</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase text-center">Estorno</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
@@ -880,6 +1026,15 @@ export default function ConciliacaoPage() {
                     </td>
                     <td className="px-4 py-3 text-slate-500 text-xs">
                       {(e as any).lancamentos?.descricao ?? '—'}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={() => estornar(e)}
+                        title="Estornar conciliacao"
+                        className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-400 hover:text-amber-600 transition-colors"
+                      >
+                        <RotateCcw size={14} />
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -906,6 +1061,12 @@ export default function ConciliacaoPage() {
                     <Badge variant={e.tipo === 'credito' ? 'success' : 'danger'}>
                       {e.tipo === 'credito' ? 'Credito' : 'Debito'}
                     </Badge>
+                    <button
+                      onClick={() => estornar(e)}
+                      className="flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 text-amber-600 text-xs font-medium hover:bg-amber-100 transition-colors mt-1"
+                    >
+                      <RotateCcw size={11} /> Estornar
+                    </button>
                   </div>
                 </div>
               </MobileCard>
@@ -1149,33 +1310,154 @@ export default function ConciliacaoPage() {
       </Modal>
 
       {/* Modal Conciliar */}
-      <Modal open={!!modalConciliar} onClose={() => setModalConciliar(null)} title="Conciliar Lancamento" size="md">
+      <Modal open={!!modalConciliar} onClose={() => setModalConciliar(null)} title="Conciliar Lancamento" size="lg">
         {modalConciliar && (
           <div className="space-y-4">
-            <div className="bg-slate-50 rounded-xl p-4">
-              <p className="text-xs text-slate-500 mb-1">Extrato bancario</p>
-              <p className="font-semibold text-slate-800">{modalConciliar.descricao}</p>
-              <p className="text-lg font-bold text-slate-700">{formatCurrency(Number(modalConciliar.valor))} &middot; {formatDate(modalConciliar.data)}</p>
+            {/* Info do extrato */}
+            <div className={`rounded-xl p-4 border ${modalConciliar.tipo === 'credito' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Extrato bancario</p>
+                  <p className="font-semibold text-slate-800">{modalConciliar.descricao}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">{formatDate(modalConciliar.data)}</p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className={`text-xl font-bold ${modalConciliar.tipo === 'credito' ? 'text-green-700' : 'text-red-700'}`}>
+                    {modalConciliar.tipo === 'credito' ? '+' : '-'}{formatCurrency(Number(modalConciliar.valor))}
+                  </p>
+                  <Badge variant={modalConciliar.tipo === 'credito' ? 'success' : 'danger'}>
+                    {modalConciliar.tipo === 'credito' ? 'Credito' : 'Debito'}
+                  </Badge>
+                </div>
+              </div>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1.5">Vincular ao lancamento do sistema</label>
-              <select
-                className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-                value={lancamentoSelecionado}
-                onChange={e => setLancamentoSelecionado(e.target.value)}
+
+            {/* Tabs */}
+            <div className="flex bg-slate-100 rounded-xl p-1">
+              <button
+                onClick={() => setModoConciliar('criar')}
+                className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${modoConciliar === 'criar' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
               >
-                <option value="">Selecione um lancamento...</option>
-                {lancamentos.map(l => (
-                  <option key={l.id} value={l.id}>
-                    {formatDate(l.data)} &middot; {l.descricao} &middot; {formatCurrency(Number(l.valor))}
-                  </option>
-                ))}
-              </select>
+                Criar Lancamento
+              </button>
+              <button
+                onClick={() => setModoConciliar('vincular')}
+                className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${modoConciliar === 'vincular' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
+              >
+                Vincular Existente
+              </button>
             </div>
-            <div className="flex justify-end gap-2">
+
+            {modoConciliar === 'criar' ? (
+              <div className="space-y-3">
+                <Input
+                  label="Descricao"
+                  value={formConciliar.descricao}
+                  onChange={e => setFormConciliar(f => ({ ...f, descricao: e.target.value }))}
+                  placeholder="Descricao do lancamento..."
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1.5">Categoria</label>
+                    <select
+                      className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                      value={formConciliar.categoria_id}
+                      onChange={e => setFormConciliar(f => ({ ...f, categoria_id: e.target.value }))}
+                    >
+                      <option value="">Sem categoria</option>
+                      {categorias
+                        .filter(c => c.tipo === (modalConciliar.tipo === 'credito' ? 'entrada' : 'saida'))
+                        .map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1.5">Centro de Custo</label>
+                    <select
+                      className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                      value={formConciliar.centro_custo_id}
+                      onChange={e => setFormConciliar(f => ({ ...f, centro_custo_id: e.target.value }))}
+                    >
+                      <option value="">Sem centro de custo</option>
+                      {centros.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1.5">Conta Bancaria</label>
+                    <select
+                      className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                      value={formConciliar.conta_bancaria_id}
+                      onChange={e => setFormConciliar(f => ({ ...f, conta_bancaria_id: e.target.value }))}
+                    >
+                      <option value="">Sem conta especifica</option>
+                      {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1.5">Forma de Pagamento</label>
+                    <select
+                      className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                      value={formConciliar.forma_pagamento}
+                      onChange={e => setFormConciliar(f => ({ ...f, forma_pagamento: e.target.value }))}
+                    >
+                      <option value="">Selecione...</option>
+                      <option value="PIX">PIX</option>
+                      <option value="TED">TED</option>
+                      <option value="DOC">DOC</option>
+                      <option value="Boleto">Boleto</option>
+                      <option value="Cartao de Credito">Cartao de Credito</option>
+                      <option value="Cartao de Debito">Cartao de Debito</option>
+                      <option value="Dinheiro">Dinheiro</option>
+                      <option value="Cheque">Cheque</option>
+                      <option value="Debito Automatico">Debito Automatico</option>
+                      <option value="Transferencia">Transferencia</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1.5">Observacoes</label>
+                  <textarea
+                    rows={2}
+                    className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 resize-none"
+                    placeholder="Observacoes sobre este lancamento..."
+                    value={formConciliar.observacoes}
+                    onChange={e => setFormConciliar(f => ({ ...f, observacoes: e.target.value }))}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1.5">Vincular ao lancamento do sistema</label>
+                {lancamentos.length === 0 ? (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
+                    <p className="text-sm text-amber-700 font-medium">Nenhum lancamento pendente no sistema</p>
+                    <p className="text-xs text-amber-600 mt-1">Use a aba "Criar Lancamento" para registrar este item</p>
+                  </div>
+                ) : (
+                  <select
+                    className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                    value={formConciliar.lancamentoId}
+                    onChange={e => setFormConciliar(f => ({ ...f, lancamentoId: e.target.value }))}
+                  >
+                    <option value="">Selecione um lancamento...</option>
+                    {lancamentos.map(l => (
+                      <option key={l.id} value={l.id}>
+                        {formatDate(l.data)} · {l.descricao} · {formatCurrency(Number(l.valor))}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
               <Button variant="secondary" onClick={() => setModalConciliar(null)}>Cancelar</Button>
-              <Button onClick={conciliar} disabled={saving || !lancamentoSelecionado}>
-                <Link2 size={14} /> Confirmar
+              <Button
+                onClick={conciliar}
+                disabled={saving || (modoConciliar === 'vincular' && !formConciliar.lancamentoId)}
+              >
+                {saving ? 'Salvando...' : <><CheckCircle size={14} /> Conciliar</>}
               </Button>
             </div>
           </div>
