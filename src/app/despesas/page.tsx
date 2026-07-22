@@ -294,7 +294,7 @@ export default function DespesasPage() {
                   <td className="px-4 py-3 text-slate-500 text-sm">{(d as any).centros_custo?.nome ?? '—'}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
-                      {d.status === 'pendente' && <>
+                      {(d.status === 'pendente' || d.status === 'vencido') && <>
                         <button onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')); setPagContaId(''); setPagForma('pix') }} className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title="Pagar"><CheckCircle size={14} /></button>
                         <a href={googleCalendarLink({ title: `Pagar: ${d.descricao}`, date: d.data_vencimento, description: `Valor: ${formatCurrency(Number(d.valor))}` })} target="_blank" rel="noopener noreferrer" className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-500 transition-colors" title="Google Agenda"><Calendar size={14} /></a>
                       </>}
@@ -360,7 +360,7 @@ export default function DespesasPage() {
 
                 {/* Linha 4: ações */}
                 <div className="flex items-center gap-2 pt-2 border-t border-slate-50">
-                  {isPendente && (
+                  {(isPendente || isVencido) && (
                     <button
                       onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')); setPagContaId(''); setPagForma('pix') }}
                       className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-green-100 text-green-700 rounded-xl text-xs font-semibold hover:bg-green-200 transition-colors"

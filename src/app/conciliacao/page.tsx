@@ -139,51 +139,135 @@ export default function ConciliacaoPage() {
       const arrayBuffer = await file.arrayBuffer()
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
 
+      // Extrai texto preservando posição (linhas separadas por \n)
       let textoCompleto = ''
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i)
         const content = await page.getTextContent()
-        const linhas = content.items.map((item: any) => item.str).join(' ')
-        textoCompleto += linhas + '\n'
+        // Agrupa por linha usando posição Y
+        const itemsPorY: Record<number, string[]> = {}
+        for (const item of content.items as any[]) {
+          const y = Math.round(item.transform?.[5] ?? 0)
+          if (!itemsPorY[y]) itemsPorY[y] = []
+          itemsPorY[y].push(item.str)
+        }
+        const linhasOrdenadas = Object.keys(itemsPorY)
+          .map(Number)
+          .sort((a, b) => b - a)
+          .map(y => itemsPorY[y].join(' '))
+        textoCompleto += linhasOrdenadas.join('\n') + '\n'
       }
 
-      const linhas = textoCompleto.split('\n')
+      const linhas = textoCompleto.split('\n').map(l => l.trim()).filter(Boolean)
       const itens: ExtratoImportado[] = []
+      const anoAtual = new Date().getFullYear()
+
+      // Padrões de data suportados
+      const regexData = [
+        /(\d{2})\/(\d{2})\/(\d{4})/,   // dd/mm/yyyy
+        /(\d{2})\/(\d{2})\/(\d{2})\b/, // dd/mm/yy
+        /(\d{2})\/(\d{2})\b/,           // dd/mm (sem ano)
+        /(\d{2})-(\d{2})-(\d{4})/,     // dd-mm-yyyy
+        /(\d{4})-(\d{2})-(\d{2})/,     // yyyy-mm-dd
+      ]
+
+      // Padrões de valor: suporta positivo, negativo, sinal no final
+      const regexValor = [
+        /([+-]?\s*\d{1,3}(?:\.\d{3})*,\d{2})\s*[DCdc]?\b/, // 1.234,56 ou 1.234,56 D
+        /\b(\d{1,3}(?:\.\d{3})*,\d{2})\s*[-]/, // 1.234,56-
+        /R\$\s*([+-]?\s*\d{1,3}(?:[.,]\d{3})*[.,]\d{2})/, // R$ 1.234,56
+      ]
+
+      const parseValorStr = (s: string): number => {
+        return parseFloat(s.replace(/\s/g, '').replace(/\./g, '').replace(',', '.'))
+      }
+
+      const parseData = (linha: string): { data: string; raw: string } | null => {
+        for (const rx of regexData) {
+          const m = linha.match(rx)
+          if (!m) continue
+          // yyyy-mm-dd
+          if (rx.source.startsWith('(\\d{4})')) {
+            return { data: `${m[1]}-${m[2]}-${m[3]}`, raw: m[0] }
+          }
+          // dd/mm/yyyy ou dd-mm-yyyy
+          if (m[3] && m[3].length === 4) {
+            return { data: `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`, raw: m[0] }
+          }
+          // dd/mm/yy
+          if (m[3] && m[3].length === 2) {
+            const ano = parseInt(m[3]) > 50 ? `19${m[3]}` : `20${m[3]}`
+            return { data: `${ano}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`, raw: m[0] }
+          }
+          // dd/mm sem ano
+          if (m[1] && m[2] && !m[3]) {
+            return { data: `${anoAtual}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`, raw: m[0] }
+          }
+        }
+        return null
+      }
 
       for (const linha of linhas) {
-        const matchData = linha.match(/(\d{2}\/\d{2}\/\d{4})/)
-        const matchValor = linha.match(/([+-]?\d{1,3}(?:\.\d{3})*(?:,\d{2}))/)
+        const dataResult = parseData(linha)
+        if (!dataResult) continue
 
-        if (!matchData || !matchValor) continue
+        let valorRaw = ''
+        let valorNum = 0
+        let isNegativo = false
 
-        const [d, m, y] = matchData[1].split('/')
-        const data = `${y}-${m}-${d}`
-        const valorStr = matchValor[1].replace(/\./g, '').replace(',', '.')
-        const valor = Math.abs(parseFloat(valorStr))
+        for (const rx of regexValor) {
+          const m = linha.match(rx)
+          if (!m) continue
+          valorRaw = m[1] ?? m[0]
+          valorNum = Math.abs(parseValorStr(valorRaw))
+          // Detecta débito: sinal -, sufixo D, ou palavra Debito/Saida na linha
+          isNegativo = /[-]/.test(valorRaw.trim().slice(-1)) ||
+            /\b[Dd]\b/.test(linha) ||
+            /[Dd][ée][Bb][Ii][Tt]|[Ss][Aa][Íí][Dd][Aa]/.test(linha) ||
+            valorRaw.trim().startsWith('-')
+          break
+        }
+
+        if (!valorRaw || valorNum === 0 || isNaN(valorNum)) continue
 
         const descricao = linha
-          .replace(matchData[1], '')
-          .replace(matchValor[1], '')
-          .replace(/R\$|\s{2,}/g, ' ')
+          .replace(dataResult.raw, '')
+          .replace(valorRaw, '')
+          .replace(/R\$|[DCdc]\b|\s{2,}/g, ' ')
+          .replace(/[^\w\s\-\/áéíóúâêîôûãõàçÁÉÍÓÚÂÊÎÔÛÃÕÀÇ.,]/g, ' ')
           .trim()
+          .replace(/\s+/g, ' ')
           .slice(0, 80)
 
-        if (!descricao || isNaN(valor) || valor === 0) continue
+        if (!descricao || descricao.length < 2) continue
 
-        const tipo: 'credito' | 'debito' = parseFloat(valorStr) >= 0 ? 'credito' : 'debito'
-        itens.push({ descricao: descricao || 'Lancamento', valor, data, tipo })
+        itens.push({
+          descricao,
+          valor: valorNum,
+          data: dataResult.data,
+          tipo: isNegativo ? 'debito' : 'credito',
+        })
       }
 
-      setImportados(itens)
+      // Remove duplicatas exatas
+      const unicos = itens.filter((item, idx, arr) =>
+        arr.findIndex(x => x.descricao === item.descricao && x.valor === item.valor && x.data === item.data) === idx
+      )
+
+      setImportados(unicos)
       setParsendo(false)
-      if (itens.length === 0) {
-        toast.warning('Nao encontramos lancamentos no PDF. Tente exportar como CSV pelo seu banco.')
+      if (unicos.length === 0) {
+        toast.warning(
+          `Nao encontramos lancamentos neste PDF (${linhas.length} linhas lidas). ` +
+          'O PDF pode usar imagens ou ter formato diferente. Exporte como CSV pelo app do banco.'
+        )
       } else {
-        toast.success(`${itens.length} lancamentos encontrados no PDF!`)
+        toast.success(`${unicos.length} lancamentos encontrados no PDF!`)
       }
-    } catch {
+    } catch (err) {
       setParsendo(false)
       toast.error('Erro ao processar PDF. Tente usar CSV.')
+      console.error('PDF parse error:', err)
     }
   }
 
