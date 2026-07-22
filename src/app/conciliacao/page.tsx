@@ -74,60 +74,165 @@ export default function ConciliacaoPage() {
 
   const parseCSV = (file: File) => {
     setParsendo(true)
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (result) => {
-        const rows = result.data as Record<string, string>[]
-        const itens: ExtratoImportado[] = []
 
-        for (const row of rows) {
-          const descKey = Object.keys(row).find(k =>
-            ['descricao', 'historico', 'lancamento', 'descr', 'memo', 'description'].includes(k.toLowerCase().trim())
-          )
-          const valorKey = Object.keys(row).find(k =>
-            ['valor', 'value', 'amount', 'credito', 'debito', 'vlr'].includes(k.toLowerCase().trim())
-          )
-          const dataKey = Object.keys(row).find(k =>
-            ['data', 'date', 'dt lancamento', 'data lancamento'].includes(k.toLowerCase().trim())
-          )
+    // Lê o arquivo primeiro para detectar separador e encoding
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const raw = ev.target?.result as string ?? ''
 
-          if (!descKey || !valorKey || !dataKey) continue
+      // Detecta separador: ponto-e-virgula é o mais comum nos bancos BR
+      const semicolons = (raw.match(/;/g) ?? []).length
+      const commas = (raw.match(/,/g) ?? []).length
+      const delimiter = semicolons > commas ? ';' : ','
 
-          const descricao = row[descKey]?.trim()
-          const valorStr = row[valorKey]?.replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, '')
-          const valor = Math.abs(parseFloat(valorStr))
-          const dataRaw = row[dataKey]?.trim()
+      Papa.parse(raw, {
+        header: true,
+        skipEmptyLines: true,
+        delimiter,
+        complete: (result) => {
+          const rows = result.data as Record<string, string>[]
+          const itens: ExtratoImportado[] = []
 
-          if (!descricao || isNaN(valor) || !dataRaw) continue
+          // Normaliza nome de coluna para comparação
+          const norm = (s: string) => s.toLowerCase()
+            .normalize('NFD').replace(/[̀-ͯ]/g, '') // remove acentos
+            .replace(/[^a-z0-9 ]/g, '').trim()
 
-          let data = ''
-          if (/^\d{2}\/\d{2}\/\d{4}$/.test(dataRaw)) {
-            const [d, m, y] = dataRaw.split('/')
-            data = `${y}-${m}-${d}`
-          } else if (/^\d{4}-\d{2}-\d{2}/.test(dataRaw)) {
-            data = dataRaw.slice(0, 10)
-          } else {
-            continue
+          // Mapeamentos de colunas ampliados para todos os bancos BR
+          const DESC_KEYS = ['descricao', 'historico', 'lancamento', 'lançamento',
+            'historico', 'memo', 'description', 'title', 'detalhe', 'complemento',
+            'identificacao', 'nome', 'estabelecimento']
+          const DATA_KEYS = ['data', 'date', 'dt', 'dt lancamento', 'data lancamento',
+            'data mov', 'data movimento', 'data transacao', 'posted date', 'datamovimento']
+          const VALOR_KEYS = ['valor', 'value', 'amount', 'vlr', 'quantia',
+            'montante', 'total']
+          const CREDITO_KEYS = ['credito', 'entrada', 'credit', 'credito r$', 'entrada r$']
+          const DEBITO_KEYS = ['debito', 'saida', 'debit', 'debito r$', 'saida r$', 'pagamento r$']
+
+          const findKey = (keys: string[], cols: string[]) =>
+            cols.find(c => keys.includes(norm(c)))
+
+          if (rows.length === 0) {
+            setImportados([])
+            setParsendo(false)
+            toast.error('Arquivo vazio ou sem dados validos.')
+            return
           }
 
-          const tipo: 'credito' | 'debito' = parseFloat(valorStr) >= 0 ? 'credito' : 'debito'
-          itens.push({ descricao, valor, data, tipo })
-        }
+          const cols = Object.keys(rows[0])
+          const descKey  = findKey(DESC_KEYS, cols)
+          const dataKey  = findKey(DATA_KEYS, cols)
+          const valorKey = findKey(VALOR_KEYS, cols)
+          const creditoKey = findKey(CREDITO_KEYS, cols)
+          const debitoKey  = findKey(DEBITO_KEYS, cols)
 
-        setImportados(itens)
-        setParsendo(false)
-        if (itens.length === 0) {
-          toast.error('Nao foi possivel ler o arquivo. Verifique o formato.')
-        } else {
-          toast.success(`${itens.length} lancamentos encontrados!`)
-        }
-      },
-      error: () => {
-        setParsendo(false)
-        toast.error('Erro ao ler o arquivo CSV')
-      },
-    })
+          // Sem coluna de data: não dá pra importar
+          if (!dataKey) {
+            setImportados([])
+            setParsendo(false)
+            toast.error(`Coluna de data nao encontrada. Colunas do arquivo: ${cols.join(', ')}`)
+            return
+          }
+
+          const parseValorBR = (s?: string): number => {
+            if (!s) return NaN
+            const limpo = s.replace(/\s/g, '')
+              .replace(/R\$\s*/gi, '')
+            // Detecta formato BR (ponto milhar, vírgula decimal) vs EN
+            if (/\d\.\d{3},\d{2}/.test(limpo)) {
+              return parseFloat(limpo.replace(/\./g, '').replace(',', '.'))
+            }
+            // Só virgula decimal (sem ponto milhar): 1234,56
+            if (/^\-?\d+,\d+$/.test(limpo)) {
+              return parseFloat(limpo.replace(',', '.'))
+            }
+            return parseFloat(limpo.replace(/[^0-9.\-]/g, ''))
+          }
+
+          const parseDataBR = (s: string): string => {
+            const d = s.trim()
+            // dd/mm/yyyy
+            if (/^\d{2}\/\d{2}\/\d{4}$/.test(d)) {
+              const [dd, mm, yyyy] = d.split('/')
+              return `${yyyy}-${mm}-${dd}`
+            }
+            // dd/mm/yy
+            if (/^\d{2}\/\d{2}\/\d{2}$/.test(d)) {
+              const [dd, mm, yy] = d.split('/')
+              const yyyy = parseInt(yy) > 50 ? `19${yy}` : `20${yy}`
+              return `${yyyy}-${mm}-${dd}`
+            }
+            // dd-mm-yyyy
+            if (/^\d{2}-\d{2}-\d{4}$/.test(d)) {
+              const [dd, mm, yyyy] = d.split('-')
+              return `${yyyy}-${mm}-${dd}`
+            }
+            // yyyy-mm-dd (ISO)
+            if (/^\d{4}-\d{2}-\d{2}/.test(d)) return d.slice(0, 10)
+            // dd/mm (sem ano)
+            if (/^\d{2}\/\d{2}$/.test(d)) {
+              const [dd, mm] = d.split('/')
+              return `${new Date().getFullYear()}-${mm}-${dd}`
+            }
+            return ''
+          }
+
+          for (const row of rows) {
+            const dataRaw = dataKey ? row[dataKey]?.trim() : ''
+            if (!dataRaw) continue
+            const data = parseDataBR(dataRaw)
+            if (!data) continue
+
+            let valor = 0
+            let tipo: 'credito' | 'debito' = 'debito'
+
+            if (creditoKey || debitoKey) {
+              // Bancos com colunas separadas (Itaú, BB, Bradesco Desktop)
+              const vCredito = parseValorBR(creditoKey ? row[creditoKey] : '')
+              const vDebito  = parseValorBR(debitoKey  ? row[debitoKey]  : '')
+              if (!isNaN(vCredito) && vCredito > 0) { valor = vCredito; tipo = 'credito' }
+              else if (!isNaN(vDebito) && vDebito > 0) { valor = vDebito; tipo = 'debito' }
+              else continue
+            } else if (valorKey) {
+              const v = parseValorBR(row[valorKey])
+              if (isNaN(v) || v === 0) continue
+              valor = Math.abs(v)
+              tipo = v < 0 ? 'debito' : 'credito'
+            } else {
+              continue
+            }
+
+            // Descrição: usa coluna ou concatena todas as colunas não-usadas
+            let descricao = descKey ? row[descKey]?.trim() : ''
+            if (!descricao) {
+              descricao = cols
+                .filter(c => c !== dataKey && c !== valorKey && c !== creditoKey && c !== debitoKey)
+                .map(c => row[c]?.trim()).filter(Boolean).join(' ').slice(0, 80)
+            }
+            if (!descricao) descricao = 'Lancamento'
+
+            itens.push({ descricao: descricao.slice(0, 80), valor, data, tipo })
+          }
+
+          setImportados(itens)
+          setParsendo(false)
+          if (itens.length === 0) {
+            toast.error(
+              `Nenhuma transacao encontrada. Colunas detectadas: ${cols.join(', ')}. ` +
+              'Tente exportar como OFX pelo seu banco.'
+            )
+          } else {
+            toast.success(`${itens.length} lancamentos encontrados!`)
+          }
+        },
+        error: () => {
+          setParsendo(false)
+          toast.error('Erro ao ler o arquivo CSV')
+        },
+      })
+    }
+    reader.onerror = () => { setParsendo(false); toast.error('Erro ao ler arquivo') }
+    reader.readAsText(file, 'UTF-8')
   }
 
   const parsePDF = async (file: File) => {
@@ -271,17 +376,89 @@ export default function ConciliacaoPage() {
     }
   }
 
+  const parseOFX = async (file: File) => {
+    setParsendo(true)
+    try {
+      const text = await file.text()
+      const itens: ExtratoImportado[] = []
+
+      // Normaliza OFX SGML legado (sem XML header) ou XML moderno
+      const normalize = (s: string) => s.replace(/>\s*</g, '><').replace(/\r/g, '')
+
+      // Extrai tag: pega conteúdo entre <TAG> e </TAG> ou valor SGML <TAG>valor\n
+      const getTag = (src: string, tag: string): string => {
+        const xmlMatch = src.match(new RegExp(`<${tag}[^>]*>([^<]+)<\/${tag}>`, 'i'))
+        if (xmlMatch) return xmlMatch[1].trim()
+        const sgmlMatch = src.match(new RegExp(`<${tag}>([^\n<]+)`, 'i'))
+        return sgmlMatch ? sgmlMatch[1].trim() : ''
+      }
+
+      // Encontra todos os blocos STMTTRN
+      const blocos = normalize(text).match(/<STMTTRN[\s\S]*?<\/STMTTRN>/gi) ?? []
+
+      // Fallback SGML: separa por <STMTTRN> sem closing tag
+      const blocosLegado = text.split(/<STMTTRN>/i).slice(1).map(b => {
+        const fim = b.indexOf('<STMTTRN')
+        return fim > 0 ? b.slice(0, fim) : b.slice(0, 800)
+      })
+
+      const fonte = blocos.length > 0 ? blocos : blocosLegado
+
+      for (const bloco of fonte) {
+        const dtRaw = getTag(bloco, 'DTPOSTED') || getTag(bloco, 'DTUSER')
+        const amtRaw = getTag(bloco, 'TRNAMT')
+        const memo = getTag(bloco, 'MEMO') || getTag(bloco, 'NAME') || getTag(bloco, 'FITID')
+        const trntype = getTag(bloco, 'TRNTYPE').toUpperCase()
+
+        if (!dtRaw || !amtRaw) continue
+
+        // Data OFX: YYYYMMDDHHMMSS ou YYYYMMDD
+        const anoStr = dtRaw.slice(0, 4)
+        const mesStr = dtRaw.slice(4, 6)
+        const diaStr = dtRaw.slice(6, 8)
+        const data = `${anoStr}-${mesStr}-${diaStr}`
+
+        const valorNum = parseFloat(amtRaw.replace(',', '.'))
+        if (isNaN(valorNum) || valorNum === 0) continue
+
+        const valor = Math.abs(valorNum)
+        // CREDIT / DEP / INT / DIV → crédito; resto → débito
+        const tipo: 'credito' | 'debito' =
+          ['CREDIT', 'DEP', 'INT', 'DIV', 'DIRECTDEP'].includes(trntype) || valorNum > 0
+            ? 'credito'
+            : 'debito'
+
+        itens.push({ descricao: memo || 'Lancamento', valor, data, tipo })
+      }
+
+      setImportados(itens)
+      setParsendo(false)
+      if (itens.length === 0) {
+        toast.warning('Nao encontramos transacoes no arquivo OFX. Verifique se e um extrato valido.')
+      } else {
+        toast.success(`${itens.length} lancamentos encontrados no OFX!`)
+      }
+    } catch (err) {
+      setParsendo(false)
+      toast.error('Erro ao processar OFX.')
+      console.error(err)
+    }
+  }
+
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
     setImportados([])
 
-    if (file.name.endsWith('.csv') || file.name.endsWith('.txt')) {
+    const nome = file.name.toLowerCase()
+    if (nome.endsWith('.csv') || nome.endsWith('.txt')) {
       parseCSV(file)
-    } else if (file.name.endsWith('.pdf')) {
+    } else if (nome.endsWith('.pdf')) {
       parsePDF(file)
+    } else if (nome.endsWith('.ofx') || nome.endsWith('.qfx')) {
+      parseOFX(file)
     } else {
-      toast.error('Formato nao suportado. Use CSV ou PDF.')
+      toast.error('Formato nao suportado. Use CSV, OFX, QFX ou PDF.')
     }
     e.target.value = ''
   }
@@ -625,13 +802,16 @@ export default function ConciliacaoPage() {
             onClick={() => fileRef.current?.click()}
             className="border-2 border-dashed border-indigo-200 rounded-2xl p-6 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/50 transition-all"
           >
-            <input ref={fileRef} type="file" accept=".csv,.pdf,.txt" className="hidden" onChange={handleFile} />
+            <input ref={fileRef} type="file" accept=".csv,.pdf,.txt,.ofx,.qfx" className="hidden" onChange={handleFile} />
             <Upload className="w-10 h-10 text-indigo-400 mx-auto mb-3" />
             <p className="font-semibold text-slate-700">Clique para selecionar o arquivo</p>
-            <p className="text-sm text-slate-400 mt-1">Suporta <strong>CSV</strong> e <strong>PDF</strong> de extratos bancarios</p>
-            <div className="flex items-center justify-center gap-4 mt-3">
+            <p className="text-sm text-slate-400 mt-1">Suporta <strong>OFX</strong>, <strong>QFX</strong>, <strong>CSV</strong> e <strong>PDF</strong></p>
+            <div className="flex items-center justify-center gap-2 mt-3 flex-wrap">
+              <span className="flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 px-2 py-1 rounded-lg font-medium">
+                <FileSpreadsheet size={12} /> OFX / QFX ✓ melhor
+              </span>
               <span className="flex items-center gap-1 text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded-lg">
-                <FileSpreadsheet size={12} /> CSV (recomendado)
+                <FileSpreadsheet size={12} /> CSV
               </span>
               <span className="flex items-center gap-1 text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded-lg">
                 <FileText size={12} /> PDF
@@ -701,12 +881,14 @@ export default function ConciliacaoPage() {
 
           {!parsendo && importados.length === 0 && (
             <div className="bg-blue-50 rounded-xl p-4">
-              <p className="text-xs font-semibold text-blue-700 mb-1">Como exportar o extrato do seu banco:</p>
-              <ul className="text-xs text-blue-600 space-y-0.5">
-                <li>• <strong>Bradesco/Itau/Santander:</strong> Internet Banking &gt; Extrato &gt; Exportar CSV</li>
-                <li>• <strong>Nubank:</strong> App &gt; Perfil &gt; Exportar extratos</li>
-                <li>• <strong>BB:</strong> Internet Banking &gt; Extrato &gt; Salvar como planilha</li>
-                <li>• Qualquer CSV com colunas: <em>Data, Descricao, Valor</em></li>
+              <p className="text-xs font-semibold text-blue-700 mb-2">Como exportar o extrato do seu banco:</p>
+              <ul className="text-xs text-blue-600 space-y-1">
+                <li>• <strong>Bradesco:</strong> Internet Banking &gt; Extrato &gt; Exportar OFX</li>
+                <li>• <strong>Itau:</strong> Internet Banking &gt; Extrato &gt; Salvar como OFX</li>
+                <li>• <strong>Santander:</strong> Internet Banking &gt; Extrato &gt; Exportar &gt; OFX</li>
+                <li>• <strong>BB:</strong> Internet Banking &gt; Extrato &gt; Exportar OFX/CSV</li>
+                <li>• <strong>Nubank:</strong> App &gt; Perfil &gt; Exportar extratos (CSV)</li>
+                <li>• <strong>Caixa:</strong> Internet Banking &gt; Extrato &gt; Exportar OFX</li>
               </ul>
             </div>
           )}

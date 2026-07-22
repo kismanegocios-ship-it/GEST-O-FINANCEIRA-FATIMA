@@ -53,6 +53,8 @@ export default function DespesasPage() {
   const [dataPagamento, setDataPagamento] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [pagContaId, setPagContaId] = useState('')
   const [pagForma, setPagForma] = useState('pix')
+  const [pagDesconto, setPagDesconto] = useState('')
+  const [pagJuros, setPagJuros] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -170,11 +172,18 @@ export default function DespesasPage() {
   const registrarPagamento = async () => {
     if (!modalPagar) return
     setSaving(true)
+    const desconto = parseFloat(pagDesconto) || 0
+    const juros = parseFloat(pagJuros) || 0
+    const valorFinal = Math.max(0, Number(modalPagar.valor) - desconto + juros)
     const { error } = await supabase.from('despesas').update({ status: 'pago', data_pagamento: dataPagamento }).eq('id', modalPagar.id)
     if (!error) {
+      const obs = [
+        desconto > 0 ? `Desconto: ${formatCurrency(desconto)}` : '',
+        juros > 0 ? `Juros/Multa: ${formatCurrency(juros)}` : '',
+      ].filter(Boolean).join(' | ') || null
       await supabase.from('lancamentos').insert({
         descricao: `Pagamento: ${modalPagar.descricao}`,
-        valor: modalPagar.valor,
+        valor: valorFinal,
         tipo: 'saida',
         data: dataPagamento,
         despesa_id: modalPagar.id,
@@ -182,6 +191,7 @@ export default function DespesasPage() {
         categoria_id: modalPagar.categoria_id ?? null,
         forma_pagamento: pagForma,
         conta_bancaria_id: pagContaId || null,
+        observacoes: obs,
         conciliado: false,
       })
       toast.success('Pagamento registrado! Saida lancada no caixa.')
@@ -190,6 +200,8 @@ export default function DespesasPage() {
     setModalPagar(null)
     setPagContaId('')
     setPagForma('pix')
+    setPagDesconto('')
+    setPagJuros('')
     load()
   }
 
@@ -295,7 +307,7 @@ export default function DespesasPage() {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
                       {(d.status === 'pendente' || d.status === 'vencido') && <>
-                        <button onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')); setPagContaId(''); setPagForma('pix') }} className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title="Pagar"><CheckCircle size={14} /></button>
+                        <button onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')); setPagContaId(''); setPagForma('pix'); setPagDesconto(''); setPagJuros('') }} className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title="Pagar"><CheckCircle size={14} /></button>
                         <a href={googleCalendarLink({ title: `Pagar: ${d.descricao}`, date: d.data_vencimento, description: `Valor: ${formatCurrency(Number(d.valor))}` })} target="_blank" rel="noopener noreferrer" className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-500 transition-colors" title="Google Agenda"><Calendar size={14} /></a>
                       </>}
                       <button onClick={() => abrirEditar(d)} className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500 transition-colors"><Pencil size={14} /></button>
@@ -362,7 +374,7 @@ export default function DespesasPage() {
                 <div className="flex items-center gap-2 pt-2 border-t border-slate-50">
                   {(isPendente || isVencido) && (
                     <button
-                      onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')); setPagContaId(''); setPagForma('pix') }}
+                      onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')); setPagContaId(''); setPagForma('pix'); setPagDesconto(''); setPagJuros('') }}
                       className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-green-100 text-green-700 rounded-xl text-xs font-semibold hover:bg-green-200 transition-colors"
                     >
                       <CheckCircle size={13} /> Marcar Pago
@@ -571,28 +583,52 @@ export default function DespesasPage() {
               <p className="text-2xl font-bold text-red-600 mt-1">{formatCurrency(Number(modalPagar.valor))}</p>
             </div>
             <Input label="Data do Pagamento *" type="date" value={dataPagamento} onChange={e => setDataPagamento(e.target.value)} />
-            <Select
-              label="Forma de Pagamento *"
-              value={pagForma}
-              onChange={e => setPagForma(e.target.value)}
-            >
-              <option value="pix">PIX</option>
-              <option value="transferencia">Transferencia</option>
-              <option value="boleto">Boleto</option>
-              <option value="dinheiro">Dinheiro</option>
-              <option value="cartao_debito">Cartao Debito</option>
-              <option value="cartao_credito">Cartao Credito</option>
-            </Select>
-            {contas.length > 0 && (
-              <Select
-                label="Conta Bancaria utilizada"
-                value={pagContaId}
-                onChange={e => setPagContaId(e.target.value)}
-              >
-                <option value="">Selecione o banco...</option>
+            <div className="grid grid-cols-2 gap-3">
+              <Select label="Forma de Pagamento *" value={pagForma} onChange={e => setPagForma(e.target.value)}>
+                <option value="pix">PIX</option>
+                <option value="transferencia">Transferencia</option>
+                <option value="boleto">Boleto</option>
+                <option value="dinheiro">Dinheiro</option>
+                <option value="cartao_debito">Cartao Debito</option>
+                <option value="cartao_credito">Cartao Credito</option>
+              </Select>
+              <Select label="Conta Bancaria" value={pagContaId} onChange={e => setPagContaId(e.target.value)}>
+                <option value="">{contas.length === 0 ? 'Nenhum banco cadastrado' : 'Selecione o banco...'}</option>
                 {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
               </Select>
+            </div>
+            {contas.length === 0 && (
+              <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
+                Cadastre bancos em <a href="/contas" className="font-semibold underline">Contas Bancarias</a> para vincular o pagamento.
+              </p>
             )}
+            {/* Desconto / Juros */}
+            <div className="border border-slate-100 rounded-xl p-3 space-y-2.5 bg-slate-50">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Ajuste do valor (opcional)</p>
+              <div className="grid grid-cols-2 gap-3">
+                <CurrencyInput
+                  label="Desconto (abater)"
+                  value={pagDesconto}
+                  onChange={e => setPagDesconto(e.target.value)}
+                  placeholder="0,00"
+                />
+                <CurrencyInput
+                  label="Juros / Multa (acrescer)"
+                  value={pagJuros}
+                  onChange={e => setPagJuros(e.target.value)}
+                  placeholder="0,00"
+                />
+              </div>
+              {/* Valor final calculado */}
+              {(parseFloat(pagDesconto) > 0 || parseFloat(pagJuros) > 0) && (
+                <div className="flex items-center justify-between pt-1 border-t border-slate-200">
+                  <span className="text-xs text-slate-500">Valor que sera debitado:</span>
+                  <span className="text-base font-bold text-indigo-700">
+                    {formatCurrency(Math.max(0, Number(modalPagar!.valor) - (parseFloat(pagDesconto) || 0) + (parseFloat(pagJuros) || 0)))}
+                  </span>
+                </div>
+              )}
+            </div>
             <p className="text-xs text-slate-400">Um lancamento de saida sera criado automaticamente no fluxo de caixa.</p>
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setModalPagar(null)}>Cancelar</Button>
