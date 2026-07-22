@@ -16,7 +16,7 @@ import {
   Plus, Search, Calendar, CheckCircle, XCircle, Trash2,
   Pencil, Filter, RefreshCw, DollarSign, ChevronRight
 } from 'lucide-react'
-import type { Despesa, CentroCusto, Categoria } from '@/lib/types'
+import type { Despesa, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
 import { format, addMonths } from 'date-fns'
 
 const STATUS_OPTIONS = ['todos', 'pendente', 'pago', 'vencido', 'cancelado']
@@ -28,19 +28,20 @@ const statusVariant: Record<string, 'warning' | 'success' | 'danger' | 'neutral'
 interface FormData {
   descricao: string; valor: string; data_vencimento: string; status: string
   centro_custo_id: string; categoria_id: string; recorrente: boolean; frequencia: string; observacoes: string
-  parcelado: boolean; num_parcelas: string; solicitante: string
+  parcelado: boolean; num_parcelas: string; solicitante: string; conta_bancaria_id: string; forma_pagamento: string
 }
 
 const emptyForm: FormData = {
   descricao: '', valor: '', data_vencimento: '', status: 'pendente',
   centro_custo_id: '', categoria_id: '', recorrente: false, frequencia: 'mensal', observacoes: '',
-  parcelado: false, num_parcelas: '2', solicitante: '',
+  parcelado: false, num_parcelas: '2', solicitante: '', conta_bancaria_id: '', forma_pagamento: 'pix',
 }
 
 export default function DespesasPage() {
   const [despesas, setDespesas] = useState<Despesa[]>([])
   const [centros, setCentros] = useState<CentroCusto[]>([])
   const [categorias, setCategorias] = useState<Categoria[]>([])
+  const [contas, setContas] = useState<ContaBancaria[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [editando, setEditando] = useState<Despesa | null>(null)
@@ -50,6 +51,8 @@ export default function DespesasPage() {
   const [filtroStatus, setFiltroStatus] = useState('todos')
   const [modalPagar, setModalPagar] = useState<Despesa | null>(null)
   const [dataPagamento, setDataPagamento] = useState(format(new Date(), 'yyyy-MM-dd'))
+  const [pagContaId, setPagContaId] = useState('')
+  const [pagForma, setPagForma] = useState('pix')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -62,14 +65,16 @@ export default function DespesasPage() {
       .eq('status', 'pendente')
       .lt('data_vencimento', hoje)
 
-    const [d, cc, cat] = await Promise.all([
+    const [d, cc, cat, cb] = await Promise.all([
       supabase.from('despesas').select('*, centros_custo(*), categorias(*)').order('data_vencimento'),
       supabase.from('centros_custo').select('*').eq('ativo', true).order('nome'),
       supabase.from('categorias').select('*').eq('tipo', 'saida').order('nome'),
+      supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome'),
     ])
     setDespesas((d.data ?? []) as Despesa[])
     setCentros(cc.data ?? [])
     setCategorias(cat.data ?? [])
+    setContas((cb.data ?? []) as ContaBancaria[])
     setLoading(false)
   }, [])
 
@@ -82,7 +87,7 @@ export default function DespesasPage() {
       descricao: d.descricao, valor: String(d.valor), data_vencimento: d.data_vencimento,
       status: d.status, centro_custo_id: d.centro_custo_id ?? '', categoria_id: d.categoria_id ?? '',
       recorrente: d.recorrente, frequencia: d.frequencia ?? 'mensal', observacoes: d.observacoes ?? '',
-      parcelado: false, num_parcelas: '2', solicitante: d.solicitante ?? '',
+      parcelado: false, num_parcelas: '2', solicitante: d.solicitante ?? '', conta_bancaria_id: '', forma_pagamento: 'pix',
     })
     setModalOpen(true)
   }
@@ -147,7 +152,8 @@ export default function DespesasPage() {
           despesa_id: editando!.id,
           centro_custo_id: form.centro_custo_id || null,
           categoria_id: form.categoria_id || null,
-          forma_pagamento: 'dinheiro',
+          forma_pagamento: form.forma_pagamento || 'pix',
+          conta_bancaria_id: form.conta_bancaria_id || null,
           conciliado: false,
         })
         toast.success('Despesa marcada como paga e saída registrada no fluxo de caixa! 💸')
@@ -167,13 +173,24 @@ export default function DespesasPage() {
     const { error } = await supabase.from('despesas').update({ status: 'pago', data_pagamento: dataPagamento }).eq('id', modalPagar.id)
     if (!error) {
       await supabase.from('lancamentos').insert({
-        descricao: `Pagamento: ${modalPagar.descricao}`, valor: modalPagar.valor, tipo: 'saida',
-        data: dataPagamento, despesa_id: modalPagar.id, centro_custo_id: modalPagar.centro_custo_id ?? null,
-        categoria_id: modalPagar.categoria_id ?? null, forma_pagamento: 'dinheiro', conciliado: false,
+        descricao: `Pagamento: ${modalPagar.descricao}`,
+        valor: modalPagar.valor,
+        tipo: 'saida',
+        data: dataPagamento,
+        despesa_id: modalPagar.id,
+        centro_custo_id: modalPagar.centro_custo_id ?? null,
+        categoria_id: modalPagar.categoria_id ?? null,
+        forma_pagamento: pagForma,
+        conta_bancaria_id: pagContaId || null,
+        conciliado: false,
       })
-      toast.success('Pagamento registrado!')
+      toast.success('Pagamento registrado! Saida lancada no caixa.')
     } else { toast.error('Erro ao registrar') }
-    setSaving(false); setModalPagar(null); load()
+    setSaving(false)
+    setModalPagar(null)
+    setPagContaId('')
+    setPagForma('pix')
+    load()
   }
 
   const cancelar = async (id: string) => { await supabase.from('despesas').update({ status: 'cancelado' }).eq('id', id); toast.success('Cancelada'); load() }
@@ -278,7 +295,7 @@ export default function DespesasPage() {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
                       {d.status === 'pendente' && <>
-                        <button onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')) }} className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title="Pagar"><CheckCircle size={14} /></button>
+                        <button onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')); setPagContaId(''); setPagForma('pix') }} className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title="Pagar"><CheckCircle size={14} /></button>
                         <a href={googleCalendarLink({ title: `Pagar: ${d.descricao}`, date: d.data_vencimento, description: `Valor: ${formatCurrency(Number(d.valor))}` })} target="_blank" rel="noopener noreferrer" className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-500 transition-colors" title="Google Agenda"><Calendar size={14} /></a>
                       </>}
                       <button onClick={() => abrirEditar(d)} className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500 transition-colors"><Pencil size={14} /></button>
@@ -345,7 +362,7 @@ export default function DespesasPage() {
                 <div className="flex items-center gap-2 pt-2 border-t border-slate-50">
                   {isPendente && (
                     <button
-                      onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')) }}
+                      onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')); setPagContaId(''); setPagForma('pix') }}
                       className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-green-100 text-green-700 rounded-xl text-xs font-semibold hover:bg-green-200 transition-colors"
                     >
                       <CheckCircle size={13} /> Marcar Pago
@@ -402,6 +419,25 @@ export default function DespesasPage() {
                 <option value="cancelado">Cancelado</option>
               </Select>
               <div /> {/* espaço para manter grid de 2 colunas */}
+              {/* Se marcando como pago via edição, pede forma e conta */}
+              {form.status === 'pago' && editando.status !== 'pago' && (
+                <>
+                  <Select label="Forma de Pagamento" value={form.forma_pagamento} onChange={e => setForm(f => ({ ...f, forma_pagamento: e.target.value }))}>
+                    <option value="pix">PIX</option>
+                    <option value="transferencia">Transferencia</option>
+                    <option value="boleto">Boleto</option>
+                    <option value="dinheiro">Dinheiro</option>
+                    <option value="cartao_debito">Cartao Debito</option>
+                    <option value="cartao_credito">Cartao Credito</option>
+                  </Select>
+                  {contas.length > 0 ? (
+                    <Select label="Conta Bancaria" value={form.conta_bancaria_id} onChange={e => setForm(f => ({ ...f, conta_bancaria_id: e.target.value }))}>
+                      <option value="">Sem conta especifica</option>
+                      {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                    </Select>
+                  ) : <div />}
+                </>
+              )}
             </>
           )}
 
@@ -534,11 +570,33 @@ export default function DespesasPage() {
               <p className="font-semibold text-slate-800">{modalPagar.descricao}</p>
               <p className="text-2xl font-bold text-red-600 mt-1">{formatCurrency(Number(modalPagar.valor))}</p>
             </div>
-            <Input label="Data do Pagamento" type="date" value={dataPagamento} onChange={e => setDataPagamento(e.target.value)} />
-            <p className="text-xs text-slate-500">Um lancamento de saida sera criado automaticamente.</p>
+            <Input label="Data do Pagamento *" type="date" value={dataPagamento} onChange={e => setDataPagamento(e.target.value)} />
+            <Select
+              label="Forma de Pagamento *"
+              value={pagForma}
+              onChange={e => setPagForma(e.target.value)}
+            >
+              <option value="pix">PIX</option>
+              <option value="transferencia">Transferencia</option>
+              <option value="boleto">Boleto</option>
+              <option value="dinheiro">Dinheiro</option>
+              <option value="cartao_debito">Cartao Debito</option>
+              <option value="cartao_credito">Cartao Credito</option>
+            </Select>
+            {contas.length > 0 && (
+              <Select
+                label="Conta Bancaria utilizada"
+                value={pagContaId}
+                onChange={e => setPagContaId(e.target.value)}
+              >
+                <option value="">Selecione o banco...</option>
+                {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+              </Select>
+            )}
+            <p className="text-xs text-slate-400">Um lancamento de saida sera criado automaticamente no fluxo de caixa.</p>
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setModalPagar(null)}>Cancelar</Button>
-              <Button variant="success" onClick={registrarPagamento} disabled={saving}><DollarSign size={14} /> Confirmar</Button>
+              <Button variant="success" onClick={registrarPagamento} disabled={saving}><DollarSign size={14} /> Confirmar Pagamento</Button>
             </div>
           </div>
         )}
