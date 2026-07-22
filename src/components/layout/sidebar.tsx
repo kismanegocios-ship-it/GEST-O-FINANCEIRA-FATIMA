@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   LayoutDashboard, FileText, ArrowLeftRight, GitMerge,
-  Calendar, BarChart3, Briefcase, Wallet, LogOut,
+  Calendar, BarChart3, Briefcase, Wallet, LogOut, Building2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase-browser'
@@ -17,6 +17,7 @@ const navItems = [
   { href: '/calendario', label: 'Calendario', icon: Calendar },
   { href: '/relatorios', label: 'Relatorios', icon: BarChart3 },
   { href: '/centros-custo', label: 'Centros de Custo', icon: Briefcase },
+  { href: '/contas', label: 'Contas Bancarias', icon: Building2 },
 ]
 
 export function Sidebar() {

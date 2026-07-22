@@ -13,7 +13,7 @@ import { TableWrapper, CardList, MobileCard } from '@/components/ui/table-mobile
 import { CurrencyInput } from '@/components/ui/currency-input'
 import { toast } from 'sonner'
 import { Plus, Search, Trash2, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react'
-import type { Lancamento, CentroCusto, Categoria } from '@/lib/types'
+import type { Lancamento, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
 import { format, startOfMonth, endOfMonth } from 'date-fns'
 
 interface FormData {
@@ -23,6 +23,7 @@ interface FormData {
   data: string
   centro_custo_id: string
   categoria_id: string
+  conta_bancaria_id: string
   forma_pagamento: string
   conciliado: boolean
   observacoes: string
@@ -30,13 +31,14 @@ interface FormData {
 
 const emptyForm: FormData = {
   descricao: '', valor: '', tipo: 'saida', data: format(new Date(), 'yyyy-MM-dd'),
-  centro_custo_id: '', categoria_id: '', forma_pagamento: 'dinheiro', conciliado: false, observacoes: '',
+  centro_custo_id: '', categoria_id: '', conta_bancaria_id: '', forma_pagamento: 'dinheiro', conciliado: false, observacoes: '',
 }
 
 export default function LancamentosPage() {
   const [lancamentos, setLancamentos] = useState<Lancamento[]>([])
   const [centros, setCentros] = useState<CentroCusto[]>([])
   const [categorias, setCategorias] = useState<Categoria[]>([])
+  const [contas, setContas] = useState<ContaBancaria[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState<FormData>(emptyForm)
@@ -55,15 +57,17 @@ export default function LancamentosPage() {
       format(startOfMonth(mesDate), 'yyyy-MM-dd'),
       format(endOfMonth(mesDate), 'yyyy-MM-dd'),
     ]
-    const [l, cc, cat] = await Promise.all([
-      supabase.from('lancamentos').select('*, centros_custo(*), categorias(*)')
+    const [l, cc, cat, cb] = await Promise.all([
+      supabase.from('lancamentos').select('*, centros_custo(*), categorias(*), contas_bancarias(*)')
         .gte('data', ini).lte('data', fim).order('data', { ascending: false }),
       supabase.from('centros_custo').select('*').eq('ativo', true).order('nome'),
       supabase.from('categorias').select('*').order('tipo').order('nome'),
+      supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome'),
     ])
     setLancamentos((l.data ?? []) as Lancamento[])
     setCentros(cc.data ?? [])
     setCategorias(cat.data ?? [])
+    setContas((cb.data ?? []) as ContaBancaria[])
     setLoading(false)
   }, [mesFiltro])
 
@@ -86,6 +90,7 @@ export default function LancamentosPage() {
       data: form.data,
       centro_custo_id: form.centro_custo_id || null,
       categoria_id: form.categoria_id || null,
+      conta_bancaria_id: form.conta_bancaria_id || null,
       forma_pagamento: form.forma_pagamento,
       conciliado: form.conciliado,
       observacoes: form.observacoes || null,
@@ -206,6 +211,7 @@ export default function LancamentosPage() {
                 <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Tipo</th>
                 <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Valor</th>
                 <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Forma</th>
+                <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Conta</th>
                 <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Categoria</th>
                 <th className="text-left px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide">Conciliado</th>
                 <th className="px-4 py-4" />
@@ -232,6 +238,7 @@ export default function LancamentosPage() {
                     {l.tipo === 'entrada' ? '+' : '-'}{formatCurrency(Number(l.valor))}
                   </td>
                   <td className="px-4 py-4 text-slate-600">{getFormaPagamentoLabel(l.forma_pagamento)}</td>
+                  <td className="px-4 py-4 text-slate-600">{(l as any).contas_bancarias?.nome ?? '—'}</td>
                   <td className="px-4 py-4 text-slate-600">{(l as any).categorias?.nome ?? '—'}</td>
                   <td className="px-4 py-4">
                     <Badge variant={l.conciliado ? 'success' : 'neutral'}>
@@ -283,6 +290,9 @@ export default function LancamentosPage() {
                 <div className="flex flex-col gap-0.5">
                   <p className="text-xs text-slate-400">{formatDate(l.data)} &middot; {getFormaPagamentoLabel(l.forma_pagamento)}</p>
                   <p className="text-xs text-slate-400">{(l as any).categorias?.nome ?? 'Sem categoria'}</p>
+                  {(l as any).contas_bancarias?.nome && (
+                    <p className="text-xs text-indigo-500">{(l as any).contas_bancarias.nome}</p>
+                  )}
                 </div>
                 <div className="text-right">
                   <p className={`text-base font-bold ${l.tipo === 'entrada' ? 'text-green-600' : 'text-red-600'}`}>
@@ -339,10 +349,16 @@ export default function LancamentosPage() {
               {centros.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
             </Select>
           </div>
-          <Select label="Categoria" value={form.categoria_id} onChange={e => setForm(f => ({ ...f, categoria_id: e.target.value }))}>
-            <option value="">Sem categoria</option>
-            {categoriasForm.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-          </Select>
+          <div className="grid grid-cols-2 gap-4">
+            <Select label="Categoria" value={form.categoria_id} onChange={e => setForm(f => ({ ...f, categoria_id: e.target.value }))}>
+              <option value="">Sem categoria</option>
+              {categoriasForm.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </Select>
+            <Select label="Conta Bancaria" value={form.conta_bancaria_id} onChange={e => setForm(f => ({ ...f, conta_bancaria_id: e.target.value }))}>
+              <option value="">Sem conta especifica</option>
+              {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </Select>
+          </div>
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={form.conciliado} onChange={e => setForm(f => ({ ...f, conciliado: e.target.checked }))} className="w-4 h-4 accent-indigo-600" />
             <span className="text-sm text-slate-600">Ja conciliado com extrato</span>

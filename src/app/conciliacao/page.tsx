@@ -11,11 +11,12 @@ import { Modal } from '@/components/ui/modal'
 import { TableWrapper, CardList, MobileCard } from '@/components/ui/table-mobile'
 import { CurrencyInput } from '@/components/ui/currency-input'
 import { toast } from 'sonner'
+import { Select } from '@/components/ui/select'
 import {
   Plus, Link2, CheckCircle, Trash2, AlertCircle,
-  Upload, FileText, X, RefreshCw, FileSpreadsheet
+  Upload, FileText, X, RefreshCw, FileSpreadsheet, Building2
 } from 'lucide-react'
-import type { ExtratoManual, Lancamento } from '@/lib/types'
+import type { ExtratoManual, Lancamento, ContaBancaria } from '@/lib/types'
 import { format } from 'date-fns'
 import Papa from 'papaparse'
 
@@ -31,15 +32,18 @@ interface FormExtrato {
   valor: string
   data: string
   tipo: 'credito' | 'debito'
+  conta_bancaria_id: string
 }
 
 const emptyForm: FormExtrato = {
-  descricao: '', valor: '', data: format(new Date(), 'yyyy-MM-dd'), tipo: 'debito',
+  descricao: '', valor: '', data: format(new Date(), 'yyyy-MM-dd'), tipo: 'debito', conta_bancaria_id: '',
 }
 
 export default function ConciliacaoPage() {
   const [extratos, setExtratos] = useState<ExtratoManual[]>([])
   const [lancamentos, setLancamentos] = useState<Lancamento[]>([])
+  const [contas, setContas] = useState<ContaBancaria[]>([])
+  const [filtroConta, setFiltroConta] = useState('')
   const [loading, setLoading] = useState(true)
   const [modalManual, setModalManual] = useState(false)
   const [modalImport, setModalImport] = useState(false)
@@ -50,16 +54,19 @@ export default function ConciliacaoPage() {
   const [importados, setImportados] = useState<ExtratoImportado[]>([])
   const [parsendo, setParsendo] = useState(false)
   const [salvandoImport, setSalvandoImport] = useState(false)
+  const [importContaId, setImportContaId] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [ext, lanc] = await Promise.all([
-      supabase.from('extrato_manual').select('*, lancamentos(*)').order('data', { ascending: false }),
+    const [ext, lanc, cb] = await Promise.all([
+      supabase.from('extrato_manual').select('*, lancamentos(*), contas_bancarias(*)').order('data', { ascending: false }),
       supabase.from('lancamentos').select('*').eq('conciliado', false).order('data', { ascending: false }),
+      supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome'),
     ])
     setExtratos((ext.data ?? []) as ExtratoManual[])
     setLancamentos((lanc.data ?? []) as Lancamento[])
+    setContas((cb.data ?? []) as ContaBancaria[])
     setLoading(false)
   }, [])
 
@@ -209,6 +216,7 @@ export default function ConciliacaoPage() {
         data: i.data,
         tipo: i.tipo,
         conciliado: false,
+        conta_bancaria_id: importContaId || null,
       }))
     )
     setSalvandoImport(false)
@@ -223,8 +231,12 @@ export default function ConciliacaoPage() {
     if (!form.descricao || !form.valor || !form.data) { toast.error('Preencha os campos'); return }
     setSaving(true)
     const { error } = await supabase.from('extrato_manual').insert({
-      descricao: form.descricao, valor: parseFloat(form.valor),
-      data: form.data, tipo: form.tipo, conciliado: false,
+      descricao: form.descricao,
+      valor: parseFloat(form.valor),
+      data: form.data,
+      tipo: form.tipo,
+      conciliado: false,
+      conta_bancaria_id: form.conta_bancaria_id || null,
     })
     setSaving(false)
     if (error) { toast.error('Erro ao salvar'); return }
@@ -254,8 +266,11 @@ export default function ConciliacaoPage() {
     load()
   }
 
-  const pendentes = extratos.filter(e => !e.conciliado)
-  const conciliados = extratos.filter(e => e.conciliado)
+  const extratosFiltrados = filtroConta
+    ? extratos.filter(e => e.conta_bancaria_id === filtroConta)
+    : extratos
+  const pendentes = extratosFiltrados.filter(e => !e.conciliado)
+  const conciliados = extratosFiltrados.filter(e => e.conciliado)
 
   return (
     <div className="space-y-4 md:space-y-6">
@@ -270,11 +285,39 @@ export default function ConciliacaoPage() {
           <Button variant="secondary" onClick={() => setModalManual(true)}>
             <Plus size={16} /> <span className="hidden sm:inline">Manual</span>
           </Button>
-          <Button onClick={() => { setImportados([]); setModalImport(true) }}>
+          <Button onClick={() => { setImportados([]); setImportContaId(''); setModalImport(true) }}>
             <Upload size={16} /> <span className="hidden sm:inline">Importar Extrato</span><span className="sm:hidden">Importar</span>
           </Button>
         </div>
       </div>
+
+      {/* Filtro por banco */}
+      {contas.length > 0 && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <Building2 size={16} className="text-slate-400 flex-shrink-0" />
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => setFiltroConta('')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
+                filtroConta === '' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              Todos os bancos
+            </button>
+            {contas.map(c => (
+              <button
+                key={c.id}
+                onClick={() => setFiltroConta(c.id)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
+                  filtroConta === c.id ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {c.nome}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Resumo */}
       <div className="grid grid-cols-3 gap-2 md:gap-4">
@@ -331,7 +374,12 @@ export default function ConciliacaoPage() {
                 </tr>
               ) : pendentes.map(e => (
                 <tr key={e.id} className="hover:bg-slate-50">
-                  <td className="px-6 py-3 font-medium text-slate-800">{e.descricao}</td>
+                  <td className="px-6 py-3">
+                    <p className="font-medium text-slate-800">{e.descricao}</p>
+                    {(e as any).contas_bancarias?.nome && (
+                      <p className="text-xs text-indigo-500 mt-0.5">{(e as any).contas_bancarias.nome}</p>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-slate-600">{formatDate(e.data)}</td>
                   <td className="px-4 py-3">
                     <Badge variant={e.tipo === 'credito' ? 'success' : 'danger'}>
@@ -381,6 +429,9 @@ export default function ConciliacaoPage() {
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-slate-800 text-sm truncate">{e.descricao}</p>
                   <p className="text-xs text-slate-400 mt-0.5">{formatDate(e.data)}</p>
+                  {(e as any).contas_bancarias?.nome && (
+                    <p className="text-xs text-indigo-500">{(e as any).contas_bancarias.nome}</p>
+                  )}
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <p className={`text-sm font-bold ${e.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
@@ -546,6 +597,15 @@ export default function ConciliacaoPage() {
                 </table>
               </div>
 
+              {contas.length > 0 && (
+                <div className="mt-3">
+                  <Select label="Vincular todos a conta bancaria" value={importContaId} onChange={e => setImportContaId(e.target.value)}>
+                    <option value="">Sem conta especifica</option>
+                    {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                  </Select>
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-slate-100">
                 <Button variant="secondary" onClick={() => setModalImport(false)}>Cancelar</Button>
                 <Button onClick={salvarImportados} disabled={salvandoImport}>
@@ -581,6 +641,12 @@ export default function ConciliacaoPage() {
             <CurrencyInput label="Valor *" value={form.valor} onChange={e => setForm(f => ({ ...f, valor: e.target.value }))} />
             <Input label="Data *" type="date" value={form.data} onChange={e => setForm(f => ({ ...f, data: e.target.value }))} />
           </div>
+          {contas.length > 0 && (
+            <Select label="Conta Bancaria" value={form.conta_bancaria_id} onChange={e => setForm(f => ({ ...f, conta_bancaria_id: e.target.value }))}>
+              <option value="">Sem conta especifica</option>
+              {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </Select>
+          )}
         </div>
         <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-slate-100">
           <Button variant="secondary" onClick={() => setModalManual(false)}>Cancelar</Button>

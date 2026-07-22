@@ -28,13 +28,13 @@ const statusVariant: Record<string, 'warning' | 'success' | 'danger' | 'neutral'
 interface FormData {
   descricao: string; valor: string; data_vencimento: string; status: string
   centro_custo_id: string; categoria_id: string; recorrente: boolean; frequencia: string; observacoes: string
-  parcelado: boolean; num_parcelas: string
+  parcelado: boolean; num_parcelas: string; solicitante: string
 }
 
 const emptyForm: FormData = {
   descricao: '', valor: '', data_vencimento: '', status: 'pendente',
   centro_custo_id: '', categoria_id: '', recorrente: false, frequencia: 'mensal', observacoes: '',
-  parcelado: false, num_parcelas: '2',
+  parcelado: false, num_parcelas: '2', solicitante: '',
 }
 
 export default function DespesasPage() {
@@ -82,7 +82,7 @@ export default function DespesasPage() {
       descricao: d.descricao, valor: String(d.valor), data_vencimento: d.data_vencimento,
       status: d.status, centro_custo_id: d.centro_custo_id ?? '', categoria_id: d.categoria_id ?? '',
       recorrente: d.recorrente, frequencia: d.frequencia ?? 'mensal', observacoes: d.observacoes ?? '',
-      parcelado: false, num_parcelas: '2',
+      parcelado: false, num_parcelas: '2', solicitante: d.solicitante ?? '',
     })
     setModalOpen(true)
   }
@@ -105,6 +105,7 @@ export default function DespesasPage() {
         recorrente: false,
         frequencia: null,
         observacoes: form.observacoes || null,
+        solicitante: form.solicitante || null,
       }))
       const { error } = await supabase.from('despesas').insert(registros)
       setSaving(false)
@@ -122,7 +123,7 @@ export default function DespesasPage() {
       descricao: form.descricao, valor: parseFloat(form.valor), data_vencimento: form.data_vencimento,
       status: statusFinal, centro_custo_id: form.centro_custo_id || null, categoria_id: form.categoria_id || null,
       recorrente: form.recorrente, frequencia: form.recorrente ? form.frequencia : null, observacoes: form.observacoes || null,
-      // Registra data de pagamento ao marcar como pago via edição
+      solicitante: form.solicitante || null,
       data_pagamento: statusFinal === 'pago' ? hoje : null,
     }
     const { error } = editando
@@ -268,6 +269,7 @@ export default function DespesasPage() {
                   <td className="px-6 py-3">
                     <p className="font-medium text-slate-800">{d.descricao}</p>
                     {d.recorrente && <span className="text-xs text-indigo-500">Recorrente · {d.frequencia}</span>}
+                    {d.solicitante && <p className="text-xs text-slate-400 mt-0.5">Solicitado por: {d.solicitante}</p>}
                   </td>
                   <td className="px-4 py-3 text-slate-600 text-sm">{formatDate(d.data_vencimento)}</td>
                   <td className="px-4 py-3 font-semibold text-slate-800">{formatCurrency(Number(d.valor))}</td>
@@ -325,14 +327,19 @@ export default function DespesasPage() {
                   </div>
                 </div>
 
-                {/* Linha 3: centro de custo (chip) */}
-                {cc && (
-                  <div className="mb-2">
+                {/* Linha 3: centro de custo + solicitante */}
+                <div className="flex items-center gap-2 flex-wrap mb-2">
+                  {cc && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-lg text-[11px] font-medium">
                       🏢 {cc}
                     </span>
-                  </div>
-                )}
+                  )}
+                  {d.solicitante && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[11px]">
+                      👤 {d.solicitante}
+                    </span>
+                  )}
+                </div>
 
                 {/* Linha 4: ações */}
                 <div className="flex items-center gap-2 pt-2 border-t border-slate-50">
@@ -498,6 +505,14 @@ export default function DespesasPage() {
               )}
             </div>
           )}
+          <div>
+            <Input
+              label="Quem solicitou"
+              placeholder="Ex: Fulano, Depto. Comercial..."
+              value={form.solicitante}
+              onChange={e => setForm(f => ({ ...f, solicitante: e.target.value }))}
+            />
+          </div>
           <div className="col-span-1 sm:col-span-2">
             <label className="block text-xs font-medium text-slate-600 mb-1.5">Observacoes</label>
             <textarea className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/30" rows={2} value={form.observacoes} onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))} />
