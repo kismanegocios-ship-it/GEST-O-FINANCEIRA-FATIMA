@@ -27,12 +27,18 @@ interface CatData {
   valor: number
 }
 
+interface DespCatData extends CatData {
+  pago: number
+  pendente: number
+}
+
 export default function RelatoriosPage() {
   const [mesSelecionado, setMesSelecionado] = useState(format(new Date(), 'yyyy-MM'))
   const [meses, setMeses] = useState<MesData[]>([])
   const [categoriasSaida, setCategoriasSaida] = useState<CatData[]>([])
   const [categoriasEntrada, setCategoriasEntrada] = useState<CatData[]>([])
   const [centrosCusto, setCentrosCusto] = useState<CatData[]>([])
+  const [despesasCategoria, setDespesasCategoria] = useState<DespCatData[]>([])
   const [resumoMes, setResumoMes] = useState({ entradas: 0, saidas: 0, saldo: 0, despesasPagas: 0, despesasPendentes: 0 })
   const [loading, setLoading] = useState(true)
 
@@ -67,7 +73,7 @@ export default function RelatoriosPage() {
 
     const [lanc, desp] = await Promise.all([
       supabase.from('lancamentos').select('tipo, valor, categorias(nome), centros_custo(nome)').gte('data', ini).lte('data', fim),
-      supabase.from('despesas').select('status, valor').gte('data_vencimento', ini).lte('data_vencimento', fim),
+      supabase.from('despesas').select('status, valor, categorias(nome), centros_custo(nome)').gte('data_vencimento', ini).lte('data_vencimento', fim),
     ])
 
     const lancamentos = lanc.data ?? []
@@ -99,6 +105,26 @@ export default function RelatoriosPage() {
     setCategoriasSaida(Object.entries(catSaidaMap).map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor))
     setCategoriasEntrada(Object.entries(catEntradaMap).map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor))
     setCentrosCusto(Object.entries(ccMap).map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor))
+
+    // Despesas (contas a pagar) por categoria — aparece mesmo antes do
+    // pagamento, ao contrario dos lancamentos que so existem apos a baixa
+    const despCatMap: Record<string, { total: number; pago: number; pendente: number }> = {}
+    for (const d of despesas) {
+      const status = (d as any).status
+      if (status === 'cancelado') continue
+      const cat = (d as any).categorias?.nome ?? 'Sem categoria'
+      const v = Number((d as any).valor)
+      const atual = despCatMap[cat] ?? { total: 0, pago: 0, pendente: 0 }
+      atual.total += v
+      if (status === 'pago') atual.pago += v
+      else atual.pendente += v
+      despCatMap[cat] = atual
+    }
+    setDespesasCategoria(
+      Object.entries(despCatMap)
+        .map(([nome, v]) => ({ nome, valor: v.total, pago: v.pago, pendente: v.pendente }))
+        .sort((a, b) => b.valor - a.valor)
+    )
 
     setLoading(false)
   }, [mesSelecionado])
@@ -160,6 +186,63 @@ export default function RelatoriosPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Aviso: mes sem caixa realizado */}
+      {!loading && resumoMes.entradas === 0 && resumoMes.saidas === 0 && resumoMes.despesasPendentes > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+          <p className="text-sm text-amber-800 font-medium">
+            Nenhum lancamento de caixa neste mes ainda
+          </p>
+          <p className="text-xs text-amber-700 mt-1">
+            Entradas e Saidas contam apenas o que ja foi <strong>realizado</strong> (despesa paga ou
+            lancamento conciliado). As contas deste mes ainda estao pendentes — veja o quadro
+            &quot;Despesas por Categoria&quot; abaixo para acompanhar por onde estao indo os gastos previstos.
+          </p>
+        </div>
+      )}
+
+      {/* Despesas (contas a pagar) por categoria */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <CardTitle>Despesas por Categoria (contas a pagar)</CardTitle>
+            <span className="text-xs text-slate-400">Pagas + pendentes do mes, por vencimento</span>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {despesasCategoria.length === 0 ? (
+            <p className="text-slate-400 text-sm text-center py-8">Sem despesas neste mes</p>
+          ) : (
+            <div className="space-y-3">
+              {despesasCategoria.map((c, i) => {
+                const totalGeral = despesasCategoria.reduce((s, x) => s + x.valor, 0)
+                const pct = totalGeral > 0 ? (c.valor / totalGeral) * 100 : 0
+                const pctPago = c.valor > 0 ? (c.pago / c.valor) * 100 : 0
+                return (
+                  <div key={c.nome}>
+                    <div className="flex justify-between items-baseline text-sm mb-1 gap-2">
+                      <span className="text-slate-600 truncate">{c.nome}</span>
+                      <span className="font-semibold text-slate-800 flex-shrink-0">
+                        {formatCurrency(c.valor)}
+                        <span className="text-xs text-slate-400 font-normal ml-1">({pct.toFixed(0)}%)</span>
+                      </span>
+                    </div>
+                    {/* Barra: verde = ja pago, faixa clara = ainda pendente */}
+                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden flex">
+                      <div className="h-2" style={{ width: `${pct * (pctPago / 100)}%`, background: '#22c55e' }} />
+                      <div className="h-2" style={{ width: `${pct * (1 - pctPago / 100)}%`, background: COLORS[i % COLORS.length], opacity: 0.45 }} />
+                    </div>
+                    <div className="flex gap-3 mt-0.5 text-[11px]">
+                      {c.pago > 0 && <span className="text-green-600">Pago: {formatCurrency(c.pago)}</span>}
+                      {c.pendente > 0 && <span className="text-yellow-600">Pendente: {formatCurrency(c.pendente)}</span>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
