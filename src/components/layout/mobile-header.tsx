@@ -10,6 +10,7 @@ const LABELS: Record<string, string> = {
   '/conciliacao': 'Conciliacao',
   '/calendario': 'Calendario',
   '/relatorios': 'Relatorios',
+  '/categorias': 'Categorias',
   '/centros-custo': 'Centros de Custo',
 }
 
