@@ -316,29 +316,72 @@ export default function ConciliacaoPage() {
               const dateColIdx = Array.from({length: numCols}, (_, i) => i)
                 .find(ci => rows.filter(r => isRowDate(r[ci])).length > rows.length * 0.5) ?? 0
               const isNum = (s?: string) => !!s && s.trim() !== '' && !isNaN(parseValorBR(s)) && parseValorBR(s) !== 0
-              const numericCols = Array.from({length: numCols}, (_, i) => i)
-                .filter(ci => ci !== dateColIdx && rows.filter(r => isNum(r[ci])).length > rows.length * 0.4)
-              const hasNeg = (ci: number) => rows.some(r => (r[ci] ?? '').trim().startsWith('-'))
-              let valueColIdx = numericCols.find(ci => hasNeg(ci)) ?? numericCols[0] ?? -1
-              if (numericCols.length >= 2 && valueColIdx === numericCols[numericCols.length - 1])
-                valueColIdx = numericCols[numericCols.length - 2]
-              if (valueColIdx === -1) {
-                setImportados([]); setParsendo(false)
-                toast.error('Coluna de valor não detectada. Tente OFX/QFX.'); return
+              const outrasCols = Array.from({length: numCols}, (_, i) => i).filter(ci => ci !== dateColIdx)
+
+              // ── Tenta achar o par Credito/Debito: duas colunas numericas mutuamente
+              // exclusivas (cada linha preenche no maximo uma das duas). A coluna de
+              // Saldo fica preenchida em TODA linha, entao nunca "sobra" pra formar
+              // esse par — assim ela nunca é confundida com o valor do lancamento.
+              const acharParCreditoDebito = (): [number, number] | null => {
+                for (let a = 0; a < outrasCols.length; a++) {
+                  for (let b = a + 1; b < outrasCols.length; b++) {
+                    const ca = outrasCols[a], cb = outrasCols[b]
+                    let ambos = 0, algum = 0
+                    for (const row of rows) {
+                      const fa = isNum(row[ca]), fb = isNum(row[cb])
+                      if (fa && fb) ambos++
+                      if (fa || fb) algum++
+                    }
+                    if (algum > rows.length * 0.5 && ambos < algum * 0.1) return [ca, cb]
+                  }
+                }
+                return null
               }
-              const descCols = Array.from({length: numCols}, (_, i) => i)
-                .filter(ci => ci !== dateColIdx && !numericCols.includes(ci))
-              for (const row of rows) {
-                const dataRaw = row[dateColIdx]?.trim()
-                if (!dataRaw) continue
-                const data = parseDataBR(dataRaw)
-                if (!data) continue
-                const v = parseValorBR(row[valueColIdx])
-                if (isNaN(v) || v === 0) continue
-                const valor = Math.abs(v)
-                const tipo: 'credito' | 'debito' = v < 0 ? 'debito' : 'credito'
-                const descricao = descCols.map(ci => row[ci]?.trim()).filter(Boolean).join(' ').slice(0, 80) || 'Lancamento'
-                itens.push({ descricao, valor, data, tipo })
+              const par = acharParCreditoDebito()
+
+              if (par) {
+                // Convencao BR: a coluna de Credito vem antes da de Debito
+                const [creditoColIdx, debitoColIdx] = par
+                const descCols = outrasCols.filter(ci => ci !== creditoColIdx && ci !== debitoColIdx)
+                for (const row of rows) {
+                  const dataRaw = row[dateColIdx]?.trim()
+                  if (!dataRaw) continue
+                  const data = parseDataBR(dataRaw)
+                  if (!data) continue
+                  const vc = parseValorBR(row[creditoColIdx])
+                  const vd = parseValorBR(row[debitoColIdx])
+                  let valor = 0, tipo: 'credito' | 'debito' | null = null
+                  if (!isNaN(vc) && vc !== 0) { valor = Math.abs(vc); tipo = 'credito' }
+                  else if (!isNaN(vd) && vd !== 0) { valor = Math.abs(vd); tipo = 'debito' }
+                  if (!tipo) continue
+                  const descricao = descCols.map(ci => row[ci]?.trim()).filter(Boolean).join(' ').slice(0, 80) || 'Lancamento'
+                  itens.push({ descricao, valor, data, tipo })
+                }
+              } else {
+                // Sem par Credito/Debito: assume coluna unica de Valor (com sinal).
+                // Descarta a ultima coluna numerica quando ha mais de uma — por
+                // convencao é o Saldo (extrato corrido), nunca o valor do lancamento.
+                const numericCols = outrasCols.filter(ci => rows.filter(r => isNum(r[ci])).length > rows.length * 0.4)
+                const candidatas = numericCols.length > 1 ? numericCols.slice(0, -1) : numericCols
+                const hasNeg = (ci: number) => rows.some(r => (r[ci] ?? '').trim().startsWith('-'))
+                const valueColIdx = candidatas.find(ci => hasNeg(ci)) ?? candidatas[0] ?? -1
+                if (valueColIdx === -1) {
+                  setImportados([]); setParsendo(false)
+                  toast.error('Coluna de valor não detectada. Tente OFX/QFX.'); return
+                }
+                const descCols = outrasCols.filter(ci => !numericCols.includes(ci))
+                for (const row of rows) {
+                  const dataRaw = row[dateColIdx]?.trim()
+                  if (!dataRaw) continue
+                  const data = parseDataBR(dataRaw)
+                  if (!data) continue
+                  const v = parseValorBR(row[valueColIdx])
+                  if (isNaN(v) || v === 0) continue
+                  const valor = Math.abs(v)
+                  const tipo: 'credito' | 'debito' = v < 0 ? 'debito' : 'credito'
+                  const descricao = descCols.map(ci => row[ci]?.trim()).filter(Boolean).join(' ').slice(0, 80) || 'Lancamento'
+                  itens.push({ descricao, valor, data, tipo })
+                }
               }
             }
             finalize()
