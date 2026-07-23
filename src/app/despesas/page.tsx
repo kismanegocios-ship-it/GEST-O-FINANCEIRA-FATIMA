@@ -156,9 +156,9 @@ export default function DespesasPage() {
           categoria_id: form.categoria_id || null,
           forma_pagamento: form.forma_pagamento || 'pix',
           conta_bancaria_id: form.conta_bancaria_id || null,
-          conciliado: false,
+          conciliado: !!form.conta_bancaria_id,
         })
-        toast.success('Despesa marcada como paga e saída registrada no fluxo de caixa! 💸')
+        toast.success(form.conta_bancaria_id ? 'Despesa paga e ja conciliada no fluxo de caixa! 💸' : 'Despesa marcada como paga e saída registrada no fluxo de caixa! 💸')
         setSaving(false); setModalOpen(false); load()
         return
       }
@@ -192,9 +192,9 @@ export default function DespesasPage() {
         forma_pagamento: pagForma,
         conta_bancaria_id: pagContaId || null,
         observacoes: obs,
-        conciliado: false,
+        conciliado: !!pagContaId,
       })
-      toast.success('Pagamento registrado! Saida lancada no caixa.')
+      toast.success(pagContaId ? 'Pagamento registrado e ja conciliado no caixa!' : 'Pagamento registrado! Saida lancada no caixa.')
     } else { toast.error('Erro ao registrar') }
     setSaving(false)
     setModalPagar(null)
@@ -629,7 +629,7 @@ export default function DespesasPage() {
                 </div>
               )}
             </div>
-            <p className="text-xs text-slate-400">Um lancamento de saida sera criado automaticamente no fluxo de caixa.</p>
+            <p className="text-xs text-slate-400">Um lancamento de saida sera criado automaticamente no fluxo de caixa{pagContaId ? ' e ja conciliado, pois o banco foi informado' : ''}.</p>
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setModalPagar(null)}>Cancelar</Button>
               <Button variant="success" onClick={registrarPagamento} disabled={saving}><DollarSign size={14} /> Confirmar Pagamento</Button>
