@@ -58,6 +58,7 @@ export default function DespesasPage() {
   const [saving, setSaving] = useState(false)
   const [busca, setBusca] = useState('')
   const [filtroStatus, setFiltroStatus] = useState('todos')
+  const [mesFiltro, setMesFiltro] = useState('') // '' = todos os meses (por vencimento)
   const [modalPagar, setModalPagar] = useState<Despesa | null>(null)
   const [dataPagamento, setDataPagamento] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [pagContaId, setPagContaId] = useState('')
@@ -314,7 +315,8 @@ export default function DespesasPage() {
   const filtradas = despesas.filter(d => {
     const mb = d.descricao.toLowerCase().includes(busca.toLowerCase())
     const ms = filtroStatus === 'todos' || d.status === filtroStatus
-    return mb && ms
+    const mm = mesFiltro === '' || (d.data_vencimento ?? '').slice(0, 7) === mesFiltro
+    return mb && ms && mm
   })
 
   // Totais acompanham o que esta filtrado na tela (busca + status)
@@ -374,10 +376,11 @@ export default function DespesasPage() {
       </div>
 
       {/* Total do que esta filtrado na tela */}
-      {(filtroStatus !== 'todos' || busca) && (
+      {(filtroStatus !== 'todos' || busca || mesFiltro) && (
         <div className="flex items-center justify-between gap-3 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-2.5">
           <span className="text-xs text-indigo-700 font-medium">
-            {filtradas.length} despesa(s) exibida(s)
+            {filtradas.length} conta(s) exibida(s)
+            {mesFiltro && ` · venc. ${format(new Date(Number(mesFiltro.slice(0, 4)), Number(mesFiltro.slice(5, 7)) - 1, 1), 'MMM/yyyy')}`}
             {filtroStatus !== 'todos' && ` · ${getStatusLabel(filtroStatus)}`}
             {busca && ` · busca "${busca}"`}
           </span>
@@ -389,7 +392,7 @@ export default function DespesasPage() {
 
       {/* Filtros */}
       <Card>
-        <CardContent className="py-3">
+        <CardContent className="py-3 space-y-2">
           <div className="flex flex-col sm:flex-row gap-2">
             <div className="relative flex-1">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -403,6 +406,28 @@ export default function DespesasPage() {
                 </button>
               ))}
             </div>
+          </div>
+          {/* Filtro por mes de vencimento */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-slate-400 font-medium">Vencimento:</span>
+            <input
+              type="month"
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+              value={mesFiltro}
+              onChange={e => setMesFiltro(e.target.value)}
+            />
+            <button
+              onClick={() => setMesFiltro('')}
+              className={`px-3 py-2 rounded-xl text-xs font-medium transition-all ${mesFiltro === '' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+            >
+              Todos os meses
+            </button>
+            <button
+              onClick={() => setMesFiltro(format(new Date(), 'yyyy-MM'))}
+              className="px-3 py-2 rounded-xl text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all"
+            >
+              Este mes
+            </button>
           </div>
         </CardContent>
       </Card>
