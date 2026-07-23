@@ -78,6 +78,8 @@ export interface Despesa {
   frequencia?: string | null
   observacoes?: string | null
   solicitante?: string | null
+  anexo_path?: string | null
+  anexo_nome?: string | null
   created_at: string
   centros_custo?: CentroCusto
   categorias?: Categoria

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { formatCurrency, formatDate, getStatusLabel, googleCalendarLink } from '@/lib/utils'
 import { Card, CardContent } from '@/components/ui/card'
@@ -14,7 +14,8 @@ import { CurrencyInput } from '@/components/ui/currency-input'
 import { toast } from 'sonner'
 import {
   Plus, Search, Calendar, CheckCircle, XCircle, Trash2,
-  Pencil, Filter, RefreshCw, DollarSign, ChevronRight
+  Pencil, Filter, RefreshCw, DollarSign, ChevronRight,
+  Paperclip, Eye, X, Loader2
 } from 'lucide-react'
 import type { Despesa, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
 import { format, addMonths } from 'date-fns'
@@ -37,6 +38,14 @@ const emptyForm: FormData = {
   parcelado: false, num_parcelas: '2', solicitante: '', conta_bancaria_id: '', forma_pagamento: 'pix',
 }
 
+// Caminho unico do anexo no Storage (fora do componente: usa Date.now/nao-puro)
+function buildAnexoPath(despesaId: string, fileName: string): string {
+  const ext = fileName.includes('.') ? fileName.split('.').pop() : ''
+  const safe = fileName.replace(/[^\w.\-]/g, '_').slice(0, 60)
+  const sufixoExt = ext && !safe.includes('.') ? '.' + ext : ''
+  return `${despesaId}/${Date.now()}-${safe}${sufixoExt}`
+}
+
 export default function DespesasPage() {
   const [despesas, setDespesas] = useState<Despesa[]>([])
   const [centros, setCentros] = useState<CentroCusto[]>([])
@@ -55,6 +64,67 @@ export default function DespesasPage() {
   const [pagForma, setPagForma] = useState('pix')
   const [pagDesconto, setPagDesconto] = useState('')
   const [pagJuros, setPagJuros] = useState('')
+  const [anexoTarget, setAnexoTarget] = useState<Despesa | null>(null)
+  const [anexoBusyId, setAnexoBusyId] = useState<string | null>(null)
+  const anexoInputRef = useRef<HTMLInputElement>(null)
+
+  const MAX_ANEXO = 2 * 1024 * 1024 // 2 MB
+
+  const pedirAnexo = (d: Despesa) => {
+    setAnexoTarget(d)
+    // reseta pra permitir escolher o mesmo arquivo de novo
+    if (anexoInputRef.current) anexoInputRef.current.value = ''
+    anexoInputRef.current?.click()
+  }
+
+  const abrirAnexo = (d: Despesa) => {
+    if (!d.anexo_path) return
+    const { data } = supabase.storage.from('comprovantes').getPublicUrl(d.anexo_path)
+    window.open(data.publicUrl, '_blank', 'noopener,noreferrer')
+  }
+
+  const handleAnexoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    const alvo = anexoTarget
+    e.target.value = ''
+    if (!file || !alvo) return
+    if (file.size > MAX_ANEXO) {
+      toast.error(`Arquivo muito grande (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximo 2 MB.`)
+      return
+    }
+    setAnexoBusyId(alvo.id)
+    const path = buildAnexoPath(alvo.id, file.name)
+
+    // Remove anexo antigo (se houver) pra nao acumular espaco
+    if (alvo.anexo_path) {
+      await supabase.storage.from('comprovantes').remove([alvo.anexo_path])
+    }
+    const { error: upErr } = await supabase.storage.from('comprovantes').upload(path, file, { upsert: false })
+    if (upErr) {
+      setAnexoBusyId(null)
+      toast.error('Erro ao enviar anexo: ' + upErr.message)
+      return
+    }
+    const { error: dbErr } = await supabase.from('despesas')
+      .update({ anexo_path: path, anexo_nome: file.name }).eq('id', alvo.id)
+    setAnexoBusyId(null)
+    if (dbErr) { toast.error('Anexo enviado mas nao salvo: ' + dbErr.message); return }
+    toast.success('Comprovante anexado! 📎')
+    load()
+  }
+
+  const removerAnexo = async (d: Despesa) => {
+    if (!d.anexo_path) return
+    if (!confirm('Remover o comprovante desta despesa? O arquivo sera apagado.')) return
+    setAnexoBusyId(d.id)
+    await supabase.storage.from('comprovantes').remove([d.anexo_path])
+    const { error } = await supabase.from('despesas')
+      .update({ anexo_path: null, anexo_nome: null }).eq('id', d.id)
+    setAnexoBusyId(null)
+    if (error) { toast.error('Erro ao remover'); return }
+    toast.success('Comprovante removido')
+    load()
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -222,6 +292,14 @@ export default function DespesasPage() {
 
   return (
     <div className="space-y-4">
+      {/* Input escondido para anexos (comprovantes) */}
+      <input
+        ref={anexoInputRef}
+        type="file"
+        accept="image/*,.pdf"
+        className="hidden"
+        onChange={handleAnexoFile}
+      />
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl md:text-2xl font-bold text-slate-800">Despesas</h1>
@@ -310,6 +388,16 @@ export default function DespesasPage() {
                         <button onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')); setPagContaId(''); setPagForma('pix'); setPagDesconto(''); setPagJuros('') }} className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title="Pagar"><CheckCircle size={14} /></button>
                         <a href={googleCalendarLink({ title: `Pagar: ${d.descricao}`, date: d.data_vencimento, description: `Valor: ${formatCurrency(Number(d.valor))}` })} target="_blank" rel="noopener noreferrer" className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-500 transition-colors" title="Google Agenda"><Calendar size={14} /></a>
                       </>}
+                      {anexoBusyId === d.id ? (
+                        <span className="p-1.5 text-slate-400"><Loader2 size={14} className="animate-spin" /></span>
+                      ) : d.anexo_path ? (
+                        <>
+                          <button onClick={() => abrirAnexo(d)} className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-600 transition-colors" title={`Ver comprovante: ${d.anexo_nome ?? ''}`}><Eye size={14} /></button>
+                          <button onClick={() => removerAnexo(d)} className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-500 transition-colors" title="Remover comprovante"><X size={14} /></button>
+                        </>
+                      ) : (
+                        <button onClick={() => pedirAnexo(d)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Anexar comprovante (max 2MB)"><Paperclip size={14} /></button>
+                      )}
                       <button onClick={() => abrirEditar(d)} className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500 transition-colors"><Pencil size={14} /></button>
                       <button onClick={() => excluir(d.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors"><Trash2 size={14} /></button>
                     </div>
@@ -386,6 +474,34 @@ export default function DespesasPage() {
                   >
                     <Pencil size={13} /> Editar
                   </button>
+                  {anexoBusyId === d.id ? (
+                    <span className="flex items-center justify-center p-2 text-slate-400"><Loader2 size={16} className="animate-spin" /></span>
+                  ) : d.anexo_path ? (
+                    <>
+                      <button
+                        onClick={() => abrirAnexo(d)}
+                        className="flex items-center justify-center p-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition-colors"
+                        title="Ver comprovante"
+                      >
+                        <Eye size={14} />
+                      </button>
+                      <button
+                        onClick={() => removerAnexo(d)}
+                        className="flex items-center justify-center p-2 bg-amber-50 text-amber-500 rounded-xl hover:bg-amber-100 transition-colors"
+                        title="Remover comprovante"
+                      >
+                        <X size={14} />
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => pedirAnexo(d)}
+                      className="flex items-center justify-center p-2 bg-slate-100 text-slate-500 rounded-xl hover:bg-slate-200 transition-colors"
+                      title="Anexar comprovante"
+                    >
+                      <Paperclip size={14} />
+                    </button>
+                  )}
                   {isPendente && (
                     <a
                       href={googleCalendarLink({ title: `Pagar: ${d.descricao}`, date: d.data_vencimento, description: `Valor: ${formatCurrency(Number(d.valor))}` })}
