@@ -166,7 +166,17 @@ export default function ConciliacaoPage() {
 
             // Campos antes da 1ª data = cabeçalho/metadados
             const headerFields = allFields.slice(0, firstDateIdx)
-            const hNorms = headerFields.map(norm)
+            const hNormsAll = headerFields.map(norm)
+
+            // Bancos costumam colocar linhas de metadados (agencia, conta, periodo)
+            // ANTES da linha de cabecalho real. Isso empurra os indices das colunas
+            // pra frente dentro de `headerFields`, mas o array `row` de cada
+            // transacao sempre comeca do zero em row[0] = valor da data. Ancorar
+            // tudo na posicao da coluna "Data" corrige esse deslocamento — sem
+            // isso, credito/debito/saldo saem lidos da coluna errada.
+            const dataHeaderIdx = hNormsAll.findIndex(n => /^(data|date|dt)\b/.test(n))
+            const headerRel = dataHeaderIdx >= 0 ? headerFields.slice(dataHeaderIdx) : headerFields
+            const hNorms = headerRel.map(norm)
 
             // Detecta posições relativas pelo nome da coluna (com fallback por posição)
             const findH = (keys: string[]) =>
@@ -176,7 +186,7 @@ export default function ConciliacaoPage() {
             let creditoRel = findH(['credito','entrada','credit'])
             let debitoRel  = findH(['debito','saida','debit'])
             let valorRel   = findH(['valor r','amount','quantia','total'])
-            const rowLen   = headerFields.length
+            const rowLen   = headerRel.length
 
             // Fallback por posição para bancos com encoding problemático (Bradesco)
             if (creditoRel === -1 && debitoRel === -1 && valorRel === -1 && rowLen >= 5) {
