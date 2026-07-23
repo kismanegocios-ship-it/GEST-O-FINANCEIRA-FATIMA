@@ -35,13 +35,22 @@ export default function ContasPage() {
   const [form, setForm] = useState<FormData>(emptyForm)
   const [saving, setSaving] = useState(false)
 
+  const [saldosPorConta, setSaldosPorConta] = useState<Record<string, number>>({})
+
   const load = useCallback(async () => {
     setLoading(true)
-    const { data } = await supabase
-      .from('contas_bancarias')
-      .select('*')
-      .order('nome')
-    setContas((data ?? []) as ContaBancaria[])
+    const [contasRes, lancRes] = await Promise.all([
+      supabase.from('contas_bancarias').select('*').order('nome'),
+      supabase.from('lancamentos').select('valor, tipo, conta_bancaria_id').not('conta_bancaria_id', 'is', null),
+    ])
+    setContas((contasRes.data ?? []) as ContaBancaria[])
+    const somas: Record<string, number> = {}
+    for (const l of lancRes.data ?? []) {
+      const contaId = l.conta_bancaria_id as string
+      const delta = l.tipo === 'entrada' ? Number(l.valor) : -Number(l.valor)
+      somas[contaId] = (somas[contaId] ?? 0) + delta
+    }
+    setSaldosPorConta(somas)
     setLoading(false)
   }, [])
 
@@ -153,6 +162,18 @@ export default function ContasPage() {
                     <span className="text-[10px] font-semibold bg-slate-100 text-slate-400 px-2 py-0.5 rounded-full">Inativa</span>
                   )}
                 </div>
+
+                {(() => {
+                  const saldoAtual = Number(conta.saldo_inicial) + (saldosPorConta[conta.id] ?? 0)
+                  return (
+                    <div className="bg-slate-50 rounded-xl px-3 py-2.5 mb-3">
+                      <p className="text-[11px] text-slate-400">Saldo atual</p>
+                      <p className={`text-lg font-bold ${saldoAtual >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                        {formatCurrency(saldoAtual)}
+                      </p>
+                    </div>
+                  )
+                })()}
 
                 <div className="space-y-1.5 mb-4">
                   <div className="flex items-center justify-between text-xs">
