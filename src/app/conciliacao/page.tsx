@@ -711,7 +711,7 @@ export default function ConciliacaoPage() {
         categoria_id:    formConciliar.categoria_id    || null,
         centro_custo_id: formConciliar.centro_custo_id || null,
         conta_bancaria_id: formConciliar.conta_bancaria_id || (modalConciliar as any).conta_bancaria_id || null,
-        forma_pagamento: formConciliar.forma_pagamento || '',
+        forma_pagamento: formConciliar.forma_pagamento || null,
         observacoes:     formConciliar.observacoes     || null,
         conciliado: true,
       }).select().single()
@@ -1455,16 +1455,12 @@ export default function ConciliacaoPage() {
                       onChange={e => setFormConciliar(f => ({ ...f, forma_pagamento: e.target.value }))}
                     >
                       <option value="">Selecione...</option>
-                      <option value="PIX">PIX</option>
-                      <option value="TED">TED</option>
-                      <option value="DOC">DOC</option>
-                      <option value="Boleto">Boleto</option>
-                      <option value="Cartao de Credito">Cartao de Credito</option>
-                      <option value="Cartao de Debito">Cartao de Debito</option>
-                      <option value="Dinheiro">Dinheiro</option>
-                      <option value="Cheque">Cheque</option>
-                      <option value="Debito Automatico">Debito Automatico</option>
-                      <option value="Transferencia">Transferencia</option>
+                      <option value="pix">PIX</option>
+                      <option value="transferencia">Transferencia</option>
+                      <option value="boleto">Boleto</option>
+                      <option value="dinheiro">Dinheiro</option>
+                      <option value="cartao_debito">Cartao Debito</option>
+                      <option value="cartao_credito">Cartao Credito</option>
                     </select>
                   </div>
                 </div>
