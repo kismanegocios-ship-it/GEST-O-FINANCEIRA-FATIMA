@@ -11,7 +11,7 @@ import { createClient } from '@/lib/supabase-browser'
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/despesas', label: 'Despesas', icon: FileText },
+  { href: '/despesas', label: 'Contas a Pagar', icon: FileText },
   { href: '/lancamentos', label: 'Lancamentos', icon: ArrowLeftRight },
   { href: '/conciliacao', label: 'Conciliacao', icon: GitMerge },
   { href: '/calendario', label: 'Calendario', icon: Calendar },

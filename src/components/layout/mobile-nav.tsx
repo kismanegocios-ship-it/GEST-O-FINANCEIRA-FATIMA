@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 
 const items = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/despesas', label: 'Despesas', icon: FileText },
+  { href: '/despesas', label: 'Contas', icon: FileText },
   { href: '/lancamentos', label: 'Caixa', icon: ArrowLeftRight },
   { href: '/calendario', label: 'Agenda', icon: Calendar },
   { href: '/relatorios', label: 'Relatorios', icon: BarChart3 },

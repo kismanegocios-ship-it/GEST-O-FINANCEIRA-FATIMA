@@ -5,7 +5,7 @@ import { Wallet } from 'lucide-react'
 
 const LABELS: Record<string, string> = {
   '/': 'Dashboard',
-  '/despesas': 'Despesas',
+  '/despesas': 'Contas a Pagar',
   '/lancamentos': 'Lancamentos',
   '/conciliacao': 'Conciliacao',
   '/calendario': 'Calendario',

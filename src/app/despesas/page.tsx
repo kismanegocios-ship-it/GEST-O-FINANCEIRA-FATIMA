@@ -15,7 +15,7 @@ import { toast } from 'sonner'
 import {
   Plus, Search, Calendar, CheckCircle, XCircle, Trash2,
   Pencil, Filter, RefreshCw, DollarSign, ChevronRight,
-  Paperclip, Eye, X, Loader2
+  Paperclip, Eye, X, Loader2, Copy
 } from 'lucide-react'
 import type { Despesa, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
 import { format, addMonths } from 'date-fns'
@@ -67,8 +67,26 @@ export default function DespesasPage() {
   const [anexoTarget, setAnexoTarget] = useState<Despesa | null>(null)
   const [anexoBusyId, setAnexoBusyId] = useState<string | null>(null)
   const anexoInputRef = useRef<HTMLInputElement>(null)
+  const [modalAnexoFile, setModalAnexoFile] = useState<File | null>(null)
+  const modalAnexoInputRef = useRef<HTMLInputElement>(null)
 
   const MAX_ANEXO = 2 * 1024 * 1024 // 2 MB
+
+  // Envia um arquivo pro Storage e grava o caminho na despesa. Retorna sucesso.
+  const subirAnexoParaDespesa = async (despesaId: string, oldPath: string | null | undefined, file: File): Promise<boolean> => {
+    if (file.size > MAX_ANEXO) {
+      toast.error(`Arquivo muito grande (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximo 2 MB.`)
+      return false
+    }
+    const path = buildAnexoPath(despesaId, file.name)
+    if (oldPath) await supabase.storage.from('comprovantes').remove([oldPath])
+    const { error: upErr } = await supabase.storage.from('comprovantes').upload(path, file, { upsert: false })
+    if (upErr) { toast.error('Erro ao enviar anexo: ' + upErr.message); return false }
+    const { error: dbErr } = await supabase.from('despesas')
+      .update({ anexo_path: path, anexo_nome: file.name }).eq('id', despesaId)
+    if (dbErr) { toast.error('Anexo enviado mas nao salvo: ' + dbErr.message); return false }
+    return true
+  }
 
   const pedirAnexo = (d: Despesa) => {
     setAnexoTarget(d)
@@ -88,29 +106,22 @@ export default function DespesasPage() {
     const alvo = anexoTarget
     e.target.value = ''
     if (!file || !alvo) return
+    setAnexoBusyId(alvo.id)
+    const ok = await subirAnexoParaDespesa(alvo.id, alvo.anexo_path, file)
+    setAnexoBusyId(null)
+    if (ok) { toast.success('Comprovante anexado! 📎'); load() }
+  }
+
+  // Escolha de arquivo dentro do modal de cadastro/edicao (sobe ao salvar)
+  const handleModalAnexoPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
     if (file.size > MAX_ANEXO) {
       toast.error(`Arquivo muito grande (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximo 2 MB.`)
       return
     }
-    setAnexoBusyId(alvo.id)
-    const path = buildAnexoPath(alvo.id, file.name)
-
-    // Remove anexo antigo (se houver) pra nao acumular espaco
-    if (alvo.anexo_path) {
-      await supabase.storage.from('comprovantes').remove([alvo.anexo_path])
-    }
-    const { error: upErr } = await supabase.storage.from('comprovantes').upload(path, file, { upsert: false })
-    if (upErr) {
-      setAnexoBusyId(null)
-      toast.error('Erro ao enviar anexo: ' + upErr.message)
-      return
-    }
-    const { error: dbErr } = await supabase.from('despesas')
-      .update({ anexo_path: path, anexo_nome: file.name }).eq('id', alvo.id)
-    setAnexoBusyId(null)
-    if (dbErr) { toast.error('Anexo enviado mas nao salvo: ' + dbErr.message); return }
-    toast.success('Comprovante anexado! 📎')
-    load()
+    setModalAnexoFile(file)
   }
 
   const removerAnexo = async (d: Despesa) => {
@@ -152,12 +163,27 @@ export default function DespesasPage() {
 
   useEffect(() => { load() }, [load])
 
-  const abrirNovo = () => { setEditando(null); setForm(emptyForm); setModalOpen(true) }
+  const abrirNovo = () => { setEditando(null); setForm(emptyForm); setModalAnexoFile(null); setModalOpen(true) }
   const abrirEditar = (d: Despesa) => {
     setEditando(d)
+    setModalAnexoFile(null)
     setForm({
       descricao: d.descricao, valor: String(d.valor), data_vencimento: d.data_vencimento,
       status: d.status, centro_custo_id: d.centro_custo_id ?? '', categoria_id: d.categoria_id ?? '',
+      recorrente: d.recorrente, frequencia: d.frequencia ?? 'mensal', observacoes: d.observacoes ?? '',
+      parcelado: false, num_parcelas: '2', solicitante: d.solicitante ?? '', conta_bancaria_id: '', forma_pagamento: 'pix',
+    })
+    setModalOpen(true)
+  }
+
+  // Duplicar: abre o modal como NOVA despesa ja preenchida com os dados da
+  // original (status volta a pendente, sem anexo), pra so ajustar e salvar.
+  const duplicar = (d: Despesa) => {
+    setEditando(null)
+    setModalAnexoFile(null)
+    setForm({
+      descricao: d.descricao, valor: String(d.valor), data_vencimento: d.data_vencimento,
+      status: 'pendente', centro_custo_id: d.centro_custo_id ?? '', categoria_id: d.categoria_id ?? '',
       recorrente: d.recorrente, frequencia: d.frequencia ?? 'mensal', observacoes: d.observacoes ?? '',
       parcelado: false, num_parcelas: '2', solicitante: d.solicitante ?? '', conta_bancaria_id: '', forma_pagamento: 'pix',
     })
@@ -203,10 +229,17 @@ export default function DespesasPage() {
       solicitante: form.solicitante || null,
       data_pagamento: statusFinal === 'pago' ? hoje : null,
     }
-    const { error } = editando
-      ? await supabase.from('despesas').update(payload).eq('id', editando.id)
-      : await supabase.from('despesas').insert(payload)
-    if (error) { setSaving(false); toast.error('Erro ao salvar'); return }
+    const { data: saved, error } = editando
+      ? await supabase.from('despesas').update(payload).eq('id', editando.id).select('id').single()
+      : await supabase.from('despesas').insert(payload).select('id').single()
+    if (error || !saved) { setSaving(false); toast.error('Erro ao salvar'); return }
+    const despesaId = (saved as { id: string }).id
+
+    // ── Anexo escolhido no modal → envia pro Storage ──
+    if (modalAnexoFile) {
+      await subirAnexoParaDespesa(despesaId, editando?.anexo_path, modalAnexoFile)
+      setModalAnexoFile(null)
+    }
 
     // ── Se marcou como PAGO e antes era pendente/vencido → cria lançamento de saída ──
     const eraDevedora = editando && ['pendente', 'vencido'].includes(editando.status)
@@ -293,7 +326,7 @@ export default function DespesasPage() {
 
   return (
     <div className="space-y-4">
-      {/* Input escondido para anexos (comprovantes) */}
+      {/* Inputs escondidos para anexos (comprovantes) */}
       <input
         ref={anexoInputRef}
         type="file"
@@ -301,13 +334,20 @@ export default function DespesasPage() {
         className="hidden"
         onChange={handleAnexoFile}
       />
+      <input
+        ref={modalAnexoInputRef}
+        type="file"
+        accept="image/*,.pdf"
+        className="hidden"
+        onChange={handleModalAnexoPick}
+      />
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl md:text-2xl font-bold text-slate-800">Despesas</h1>
-          <p className="text-xs md:text-sm text-slate-500 mt-0.5">Pre-cadastro de contas a pagar</p>
+          <h1 className="text-xl md:text-2xl font-bold text-slate-800">Contas a Pagar</h1>
+          <p className="text-xs md:text-sm text-slate-500 mt-0.5">Cadastro e controle das contas a pagar</p>
         </div>
         <Button onClick={abrirNovo} size="sm">
-          <Plus size={15} /> <span className="hidden sm:inline">Nova</span> Despesa
+          <Plus size={15} /> <span className="hidden sm:inline">Nova</span> Conta
         </Button>
       </div>
 
@@ -413,8 +453,9 @@ export default function DespesasPage() {
                       ) : (
                         <button onClick={() => pedirAnexo(d)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Anexar comprovante (max 2MB)"><Paperclip size={14} /></button>
                       )}
-                      <button onClick={() => abrirEditar(d)} className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500 transition-colors"><Pencil size={14} /></button>
-                      <button onClick={() => excluir(d.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors"><Trash2 size={14} /></button>
+                      <button onClick={() => abrirEditar(d)} className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500 transition-colors" title="Editar"><Pencil size={14} /></button>
+                      <button onClick={() => duplicar(d)} className="p-1.5 rounded-lg hover:bg-violet-50 text-violet-500 transition-colors" title="Duplicar"><Copy size={14} /></button>
+                      <button onClick={() => excluir(d.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors" title="Excluir"><Trash2 size={14} /></button>
                     </div>
                   </td>
                 </tr>
@@ -488,6 +529,13 @@ export default function DespesasPage() {
                     className="flex items-center justify-center gap-1.5 px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-200 transition-colors"
                   >
                     <Pencil size={13} /> Editar
+                  </button>
+                  <button
+                    onClick={() => duplicar(d)}
+                    className="flex items-center justify-center p-2 bg-violet-50 text-violet-500 rounded-xl hover:bg-violet-100 transition-colors"
+                    title="Duplicar"
+                  >
+                    <Copy size={14} />
                   </button>
                   {anexoBusyId === d.id ? (
                     <span className="flex items-center justify-center p-2 text-slate-400"><Loader2 size={16} className="animate-spin" /></span>
@@ -696,11 +744,51 @@ export default function DespesasPage() {
             <label className="block text-xs font-medium text-slate-600 mb-1.5">Observacoes</label>
             <textarea className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/30" rows={2} value={form.observacoes} onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))} />
           </div>
+
+          {/* Comprovante (anexo) — some quando esta criando parcelas */}
+          {!(form.parcelado && !editando) && (
+            <div className="col-span-1 sm:col-span-2">
+              <label className="block text-xs font-medium text-slate-600 mb-1.5">Comprovante (opcional, max 2MB)</label>
+              {modalAnexoFile ? (
+                <div className="flex items-center justify-between gap-2 bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2.5">
+                  <span className="flex items-center gap-2 text-sm text-indigo-700 min-w-0">
+                    <Paperclip size={14} className="flex-shrink-0" />
+                    <span className="truncate">{modalAnexoFile.name}</span>
+                    <span className="text-xs text-indigo-400 flex-shrink-0">({(modalAnexoFile.size / 1024).toFixed(0)} KB)</span>
+                  </span>
+                  <button type="button" onClick={() => setModalAnexoFile(null)} className="p-1 rounded-lg hover:bg-indigo-100 text-indigo-500 flex-shrink-0"><X size={14} /></button>
+                </div>
+              ) : editando?.anexo_path ? (
+                <div className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5">
+                  <span className="flex items-center gap-2 text-sm text-slate-600 min-w-0">
+                    <Paperclip size={14} className="flex-shrink-0 text-indigo-500" />
+                    <span className="truncate">{editando.anexo_nome ?? 'Comprovante anexado'}</span>
+                  </span>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button type="button" onClick={() => abrirAnexo(editando)} className="px-2 py-1 rounded-lg text-xs font-medium text-indigo-600 hover:bg-indigo-50">Ver</button>
+                    <button type="button" onClick={() => modalAnexoInputRef.current?.click()} className="px-2 py-1 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-100">Trocar</button>
+                    <button type="button" onClick={() => { removerAnexo(editando); setModalOpen(false) }} className="px-2 py-1 rounded-lg text-xs font-medium text-amber-600 hover:bg-amber-50">Remover</button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => modalAnexoInputRef.current?.click()}
+                  className="w-full flex items-center justify-center gap-2 border-2 border-dashed border-slate-200 rounded-xl px-3 py-3 text-sm text-slate-500 hover:border-indigo-300 hover:bg-indigo-50/40 transition-all"
+                >
+                  <Paperclip size={15} /> Anexar comprovante (imagem ou PDF)
+                </button>
+              )}
+              {!editando && (
+                <p className="text-[11px] text-slate-400 mt-1">O comprovante sera enviado ao salvar a conta.</p>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-slate-100">
           <Button variant="secondary" onClick={() => setModalOpen(false)}>Cancelar</Button>
           <Button onClick={salvar} disabled={saving}>
-            {saving ? 'Salvando...' : editando ? 'Salvar alteracoes' : form.parcelado ? `Criar ${form.num_parcelas || '?'} parcelas` : 'Cadastrar Despesa'}
+            {saving ? 'Salvando...' : editando ? 'Salvar alteracoes' : form.parcelado ? `Criar ${form.num_parcelas || '?'} parcelas` : 'Cadastrar Conta'}
           </Button>
         </div>
       </Modal>
