@@ -14,10 +14,12 @@ import { toast } from 'sonner'
 import { Select } from '@/components/ui/select'
 import {
   Plus, Link2, CheckCircle, Trash2, AlertCircle,
-  Upload, FileText, X, RefreshCw, FileSpreadsheet, Building2, RotateCcw
+  Upload, FileText, X, RefreshCw, FileSpreadsheet, Building2, RotateCcw,
+  ChevronDown, ChevronRight
 } from 'lucide-react'
 import type { ExtratoManual, Lancamento, ContaBancaria, Categoria, CentroCusto } from '@/lib/types'
 import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
 import Papa from 'papaparse'
 
 interface ExtratoImportado {
@@ -58,6 +60,7 @@ export default function ConciliacaoPage() {
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [centros, setCentros] = useState<CentroCusto[]>([])
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set())
+  const [mesesAbertos, setMesesAbertos] = useState<Set<string> | null>(null)
   const [modoConciliar, setModoConciliar] = useState<'criar' | 'vincular'>('criar')
   const [formConciliar, setFormConciliar] = useState({
     lancamentoId: '', descricao: '', categoria_id: '',
@@ -800,6 +803,35 @@ export default function ConciliacaoPage() {
   const pendentes = extratosFiltrados.filter(e => !e.conciliado)
   const conciliados = extratosFiltrados.filter(e => e.conciliado)
 
+  // Agrupa conciliados por mes (yyyy-MM), mais recente primeiro, pra nao
+  // deixar a pagina gigante quando tiver muita conciliacao acumulada.
+  const gruposConciliados = (() => {
+    const map = new Map<string, ExtratoManual[]>()
+    for (const e of conciliados) {
+      const chave = (e.data ?? '').slice(0, 7)
+      const lista = map.get(chave)
+      if (lista) lista.push(e)
+      else map.set(chave, [e])
+    }
+    return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]))
+  })()
+
+  const labelMes = (chave: string) => {
+    const [ano, mes] = chave.split('-').map(Number)
+    if (!ano || !mes) return 'Sem data'
+    return format(new Date(ano, mes - 1, 1), "MMMM 'de' yyyy", { locale: ptBR })
+  }
+
+  // Por padrao so o mes mais recente vem aberto; o resto fica recolhido
+  const mesMaisRecente = gruposConciliados[0]?.[0]
+  const mesesVisiveis = mesesAbertos ?? new Set(mesMaisRecente ? [mesMaisRecente] : [])
+  const toggleMes = (chave: string) => {
+    const next = new Set(mesesVisiveis)
+    if (next.has(chave)) next.delete(chave)
+    else next.add(chave)
+    setMesesAbertos(next)
+  }
+
   return (
     <div className="space-y-4 md:space-y-6">
       {/* Header */}
@@ -1041,90 +1073,144 @@ export default function ConciliacaoPage() {
         </CardList>
       </Card>
 
-      {/* Conciliados */}
+      {/* Conciliados — agrupados por mes (recolhiveis) */}
       {conciliados.length > 0 && (
         <Card>
           <CardHeader>
-            <div className="flex items-center gap-2">
-              <CheckCircle className="w-4 h-4 text-green-500" />
-              <CardTitle>Conciliados</CardTitle>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-green-500" />
+                <CardTitle>Conciliados</CardTitle>
+                <span className="bg-green-100 text-green-700 text-xs font-bold px-2 py-0.5 rounded-full">{conciliados.length}</span>
+              </div>
+              {gruposConciliados.length > 1 && (
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => setMesesAbertos(new Set(gruposConciliados.map(([k]) => k)))}
+                    className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded-lg hover:bg-slate-100 transition-colors"
+                  >
+                    Abrir todos
+                  </button>
+                  <button
+                    onClick={() => setMesesAbertos(new Set())}
+                    className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded-lg hover:bg-slate-100 transition-colors"
+                  >
+                    Recolher todos
+                  </button>
+                </div>
+              )}
             </div>
           </CardHeader>
 
-          {/* Desktop */}
-          <TableWrapper>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-100">
-                  <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 uppercase">Descricao</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Data</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Tipo</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Valor</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Lancamento vinculado</th>
-                  <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase text-center">Estorno</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {conciliados.map(e => (
-                  <tr key={e.id} className="hover:bg-slate-50">
-                    <td className="px-6 py-3 font-medium text-slate-700">{e.descricao}</td>
-                    <td className="px-4 py-3 text-slate-500">{formatDate(e.data)}</td>
-                    <td className="px-4 py-3">
-                      <Badge variant={e.tipo === 'credito' ? 'success' : 'danger'}>
-                        {e.tipo === 'credito' ? 'Credito' : 'Debito'}
-                      </Badge>
-                    </td>
-                    <td className={`px-4 py-3 font-semibold ${e.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
-                      {formatCurrency(Number(e.valor))}
-                    </td>
-                    <td className="px-4 py-3 text-slate-500 text-xs">
-                      {(e as any).lancamentos?.descricao ?? '—'}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <button
-                        onClick={() => estornar(e)}
-                        title="Estornar conciliacao"
-                        className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-400 hover:text-amber-600 transition-colors"
-                      >
-                        <RotateCcw size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TableWrapper>
+          <div className="divide-y divide-slate-100">
+            {gruposConciliados.map(([chave, itens]) => {
+              const aberto = mesesVisiveis.has(chave)
+              const creditos = itens.filter(i => i.tipo === 'credito').reduce((s, i) => s + Number(i.valor), 0)
+              const debitos = itens.filter(i => i.tipo === 'debito').reduce((s, i) => s + Number(i.valor), 0)
+              return (
+                <div key={chave}>
+                  {/* Cabecalho do mes */}
+                  <button
+                    onClick={() => toggleMes(chave)}
+                    className="w-full flex items-center justify-between gap-3 px-4 md:px-6 py-3 hover:bg-slate-50 transition-colors text-left"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      {aberto
+                        ? <ChevronDown size={16} className="text-slate-400 flex-shrink-0" />
+                        : <ChevronRight size={16} className="text-slate-400 flex-shrink-0" />}
+                      <span className="font-semibold text-slate-700 text-sm capitalize truncate">{labelMes(chave)}</span>
+                      <span className="bg-slate-100 text-slate-500 text-[11px] font-bold px-2 py-0.5 rounded-full flex-shrink-0">
+                        {itens.length}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 flex-shrink-0 text-xs">
+                      {creditos > 0 && <span className="text-green-600 font-semibold">+{formatCurrency(creditos)}</span>}
+                      {debitos > 0 && <span className="text-red-600 font-semibold">-{formatCurrency(debitos)}</span>}
+                    </div>
+                  </button>
 
-          {/* Mobile */}
-          <CardList>
-            {conciliados.map(e => (
-              <MobileCard key={e.id}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-slate-700 text-sm truncate">{e.descricao}</p>
-                    <p className="text-xs text-slate-400 mt-0.5">{formatDate(e.data)}</p>
-                    {(e as any).lancamentos?.descricao && (
-                      <p className="text-xs text-indigo-500 mt-0.5">Vinculado: {(e as any).lancamentos.descricao}</p>
-                    )}
-                  </div>
-                  <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                    <p className={`text-sm font-bold ${e.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
-                      {formatCurrency(Number(e.valor))}
-                    </p>
-                    <Badge variant={e.tipo === 'credito' ? 'success' : 'danger'}>
-                      {e.tipo === 'credito' ? 'Credito' : 'Debito'}
-                    </Badge>
-                    <button
-                      onClick={() => estornar(e)}
-                      className="flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 text-amber-600 text-xs font-medium hover:bg-amber-100 transition-colors mt-1"
-                    >
-                      <RotateCcw size={11} /> Estornar
-                    </button>
-                  </div>
+                  {aberto && (
+                    <>
+                      {/* Desktop */}
+                      <TableWrapper>
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-100 bg-slate-50/60">
+                              <th className="text-left px-6 py-2.5 text-xs font-semibold text-slate-500 uppercase">Descricao</th>
+                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase">Data</th>
+                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase">Tipo</th>
+                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase">Valor</th>
+                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase">Lancamento vinculado</th>
+                              <th className="px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase text-center">Estorno</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                            {itens.map(e => (
+                              <tr key={e.id} className="hover:bg-slate-50">
+                                <td className="px-6 py-3 font-medium text-slate-700">{e.descricao}</td>
+                                <td className="px-4 py-3 text-slate-500">{formatDate(e.data)}</td>
+                                <td className="px-4 py-3">
+                                  <Badge variant={e.tipo === 'credito' ? 'success' : 'danger'}>
+                                    {e.tipo === 'credito' ? 'Credito' : 'Debito'}
+                                  </Badge>
+                                </td>
+                                <td className={`px-4 py-3 font-semibold ${e.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
+                                  {formatCurrency(Number(e.valor))}
+                                </td>
+                                <td className="px-4 py-3 text-slate-500 text-xs">
+                                  {(e as any).lancamentos?.descricao ?? '—'}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  <button
+                                    onClick={() => estornar(e)}
+                                    title="Estornar conciliacao"
+                                    className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-400 hover:text-amber-600 transition-colors"
+                                  >
+                                    <RotateCcw size={14} />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </TableWrapper>
+
+                      {/* Mobile */}
+                      <CardList>
+                        {itens.map(e => (
+                          <MobileCard key={e.id}>
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-slate-700 text-sm truncate">{e.descricao}</p>
+                                <p className="text-xs text-slate-400 mt-0.5">{formatDate(e.data)}</p>
+                                {(e as any).lancamentos?.descricao && (
+                                  <p className="text-xs text-indigo-500 mt-0.5">Vinculado: {(e as any).lancamentos.descricao}</p>
+                                )}
+                              </div>
+                              <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                                <p className={`text-sm font-bold ${e.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
+                                  {formatCurrency(Number(e.valor))}
+                                </p>
+                                <Badge variant={e.tipo === 'credito' ? 'success' : 'danger'}>
+                                  {e.tipo === 'credito' ? 'Credito' : 'Debito'}
+                                </Badge>
+                                <button
+                                  onClick={() => estornar(e)}
+                                  className="flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 text-amber-600 text-xs font-medium hover:bg-amber-100 transition-colors mt-1"
+                                >
+                                  <RotateCcw size={11} /> Estornar
+                                </button>
+                              </div>
+                            </div>
+                          </MobileCard>
+                        ))}
+                      </CardList>
+                    </>
+                  )}
                 </div>
-              </MobileCard>
-            ))}
-          </CardList>
+              )
+            })}
+          </div>
         </Card>
       )}
 

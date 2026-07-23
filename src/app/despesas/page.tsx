@@ -284,10 +284,11 @@ export default function DespesasPage() {
     return mb && ms
   })
 
+  // Totais acompanham o que esta filtrado na tela (busca + status)
   const totais = {
-    pendente: despesas.filter(d => d.status === 'pendente').reduce((s, d) => s + Number(d.valor), 0),
-    vencido: despesas.filter(d => d.status === 'vencido').reduce((s, d) => s + Number(d.valor), 0),
-    pago: despesas.filter(d => d.status === 'pago').reduce((s, d) => s + Number(d.valor), 0),
+    pendente: filtradas.filter(d => d.status === 'pendente').reduce((s, d) => s + Number(d.valor), 0),
+    vencido: filtradas.filter(d => d.status === 'vencido').reduce((s, d) => s + Number(d.valor), 0),
+    pago: filtradas.filter(d => d.status === 'pago').reduce((s, d) => s + Number(d.valor), 0),
   }
 
   return (
@@ -331,6 +332,20 @@ export default function DespesasPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Total do que esta filtrado na tela */}
+      {(filtroStatus !== 'todos' || busca) && (
+        <div className="flex items-center justify-between gap-3 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-2.5">
+          <span className="text-xs text-indigo-700 font-medium">
+            {filtradas.length} despesa(s) exibida(s)
+            {filtroStatus !== 'todos' && ` · ${getStatusLabel(filtroStatus)}`}
+            {busca && ` · busca "${busca}"`}
+          </span>
+          <span className="text-sm font-bold text-indigo-700">
+            Total: {formatCurrency(filtradas.reduce((s, d) => s + Number(d.valor), 0))}
+          </span>
+        </div>
+      )}
 
       {/* Filtros */}
       <Card>
