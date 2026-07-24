@@ -15,7 +15,7 @@ import { Select } from '@/components/ui/select'
 import {
   Plus, Link2, CheckCircle, Trash2, AlertCircle,
   Upload, FileText, X, RefreshCw, FileSpreadsheet, Building2, RotateCcw,
-  ChevronDown, ChevronRight
+  ChevronDown, ChevronRight, ShieldCheck
 } from 'lucide-react'
 import type { ExtratoManual, Lancamento, ContaBancaria, Categoria, CentroCusto } from '@/lib/types'
 import { format } from 'date-fns'
@@ -61,6 +61,7 @@ export default function ConciliacaoPage() {
   const [centros, setCentros] = useState<CentroCusto[]>([])
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set())
   const [mesesAbertos, setMesesAbertos] = useState<Set<string> | null>(null)
+  const [verificando, setVerificando] = useState(false)
   const [modoConciliar, setModoConciliar] = useState<'criar' | 'vincular'>('criar')
   const [formConciliar, setFormConciliar] = useState({
     lancamentoId: '', descricao: '', categoria_id: '',
@@ -699,10 +700,24 @@ export default function ConciliacaoPage() {
 
     if (modoConciliar === 'vincular') {
       if (!formConciliar.lancamentoId) { setSaving(false); toast.error('Selecione um lancamento'); return }
-      await Promise.all([
-        supabase.from('extrato_manual').update({ conciliado: true, lancamento_id: formConciliar.lancamentoId }).eq('id', modalConciliar.id),
-        supabase.from('lancamentos').update({ conciliado: true }).eq('id', formConciliar.lancamentoId),
-      ])
+      // Marca o LANCAMENTO primeiro e confirma que a linha foi mesmo atualizada.
+      // Se falhar aqui, o extrato continua pendente (da pra tentar de novo) em
+      // vez de ficar "conciliado" com o lancamento solto na aba Lancamentos.
+      const { data: lancAtualizado, error: lancErr } = await supabase
+        .from('lancamentos').update({ conciliado: true })
+        .eq('id', formConciliar.lancamentoId).select('id').single()
+      if (lancErr || !lancAtualizado) {
+        setSaving(false)
+        toast.error('Nao foi possivel marcar o lancamento como conciliado: ' + (lancErr?.message ?? 'lancamento nao encontrado'))
+        return
+      }
+      const { error: extErr } = await supabase.from('extrato_manual')
+        .update({ conciliado: true, lancamento_id: formConciliar.lancamentoId }).eq('id', modalConciliar.id)
+      if (extErr) {
+        setSaving(false)
+        toast.error('Lancamento marcado, mas o extrato nao foi vinculado: ' + extErr.message)
+        return
+      }
     } else {
       // Cria novo lancamento com os dados do extrato + form
       const tipo: 'entrada' | 'saida' = modalConciliar.tipo === 'credito' ? 'entrada' : 'saida'
@@ -724,12 +739,80 @@ export default function ConciliacaoPage() {
         toast.error('Erro ao criar lancamento: ' + (error?.message ?? 'desconhecido'))
         return
       }
-      await supabase.from('extrato_manual').update({ conciliado: true, lancamento_id: novoLanc.id }).eq('id', modalConciliar.id)
+      const { error: vincErr } = await supabase.from('extrato_manual')
+        .update({ conciliado: true, lancamento_id: novoLanc.id }).eq('id', modalConciliar.id)
+      if (vincErr) {
+        setSaving(false)
+        toast.error('Lancamento criado, mas o extrato nao foi vinculado: ' + vincErr.message)
+        load()
+        return
+      }
     }
 
     setSaving(false)
     toast.success('Conciliado com sucesso!')
     setModalConciliar(null)
+    load()
+  }
+
+  // Varre extratos conciliados e garante que o lancamento vinculado tambem
+  // esta marcado como conciliado na aba Lancamentos. Corrige o que da pra
+  // corrigir sozinho e avisa sobre o que precisa de decisao do usuario.
+  const verificarConsistencia = async () => {
+    setVerificando(true)
+    const { data: exts, error } = await supabase
+      .from('extrato_manual').select('id, lancamento_id').eq('conciliado', true)
+    if (error) { setVerificando(false); toast.error('Erro ao verificar: ' + error.message); return }
+
+    const lista = exts ?? []
+    const semVinculo = lista.filter(e => !e.lancamento_id)
+    const ids = lista.map(e => e.lancamento_id).filter(Boolean) as string[]
+
+    let corrigidos = 0
+    let perdidos: string[] = []
+
+    if (ids.length > 0) {
+      const { data: lancs, error: lErr } = await supabase
+        .from('lancamentos').select('id, conciliado').in('id', ids)
+      if (lErr) { setVerificando(false); toast.error('Erro ao verificar: ' + lErr.message); return }
+
+      const achados = lancs ?? []
+      const naoConciliados = achados.filter(l => !l.conciliado).map(l => l.id)
+      if (naoConciliados.length > 0) {
+        const { error: fixErr } = await supabase
+          .from('lancamentos').update({ conciliado: true }).in('id', naoConciliados)
+        if (fixErr) { setVerificando(false); toast.error('Erro ao corrigir: ' + fixErr.message); return }
+        corrigidos = naoConciliados.length
+      }
+
+      // Extrato aponta pra um lancamento que nao existe mais (foi excluido)
+      const existentes = new Set(achados.map(l => l.id))
+      perdidos = ids.filter(id => !existentes.has(id))
+    }
+
+    setVerificando(false)
+
+    if (corrigidos > 0) {
+      toast.success(`${corrigidos} lancamento(s) estavam fora de sincronia e foram marcados como conciliados.`)
+    }
+    if (perdidos.length > 0) {
+      const extratosOrfaos = lista.filter(e => e.lancamento_id && perdidos.includes(e.lancamento_id))
+      if (confirm(
+        `${extratosOrfaos.length} item(ns) do extrato apontam para lancamentos que foram excluidos.\n\n` +
+        `Deseja voltar esses itens para "pendente" para conciliar de novo?`
+      )) {
+        await supabase.from('extrato_manual')
+          .update({ conciliado: false, lancamento_id: null })
+          .in('id', extratosOrfaos.map(e => e.id))
+        toast.success(`${extratosOrfaos.length} item(ns) voltaram para pendente.`)
+      }
+    }
+    if (semVinculo.length > 0) {
+      toast.warning(`${semVinculo.length} item(ns) estao conciliados sem lancamento vinculado. Use o estorno para refazer.`)
+    }
+    if (corrigidos === 0 && perdidos.length === 0 && semVinculo.length === 0) {
+      toast.success('Tudo certo! Todos os itens conciliados estao sincronizados com os lancamentos.')
+    }
     load()
   }
 
@@ -842,6 +925,15 @@ export default function ConciliacaoPage() {
         </div>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={load}><RefreshCw size={14} /></Button>
+          <Button
+            variant="secondary"
+            onClick={verificarConsistencia}
+            disabled={verificando}
+            title="Confere se todo item conciliado esta marcado como conciliado na aba Lancamentos"
+          >
+            <ShieldCheck size={15} />
+            <span className="hidden sm:inline">{verificando ? 'Verificando...' : 'Verificar'}</span>
+          </Button>
           <Button variant="secondary" onClick={() => setModalManual(true)}>
             <Plus size={16} /> <span className="hidden sm:inline">Manual</span>
           </Button>
