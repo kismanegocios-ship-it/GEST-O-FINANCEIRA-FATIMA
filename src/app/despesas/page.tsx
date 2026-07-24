@@ -38,6 +38,15 @@ const emptyForm: FormData = {
   parcelado: false, num_parcelas: '2', solicitante: '', conta_bancaria_id: '', forma_pagamento: 'pix',
 }
 
+// Monta a lista padrao de parcelas: mesmo valor, vencimentos mensais
+function gerarParcelas(n: number, valorBase: string, dataBase: string) {
+  const base = dataBase ? new Date(dataBase + 'T12:00:00') : null
+  return Array.from({ length: n }, (_, i) => ({
+    valor: valorBase,
+    data: base ? format(addMonths(base, i), 'yyyy-MM-dd') : '',
+  }))
+}
+
 // Caminho unico do anexo no Storage (fora do componente: usa Date.now/nao-puro)
 function buildAnexoPath(despesaId: string, fileName: string): string {
   const ext = fileName.includes('.') ? fileName.split('.').pop() : ''
@@ -70,6 +79,8 @@ export default function DespesasPage() {
   const anexoInputRef = useRef<HTMLInputElement>(null)
   const [modalAnexoFile, setModalAnexoFile] = useState<File | null>(null)
   const modalAnexoInputRef = useRef<HTMLInputElement>(null)
+  // null = todas as parcelas com o mesmo valor; lista = valores/datas personalizados
+  const [parcelasCustom, setParcelasCustom] = useState<{ valor: string; data: string }[] | null>(null)
 
   const MAX_ANEXO = 2 * 1024 * 1024 // 2 MB
 
@@ -112,6 +123,55 @@ export default function DespesasPage() {
     setAnexoBusyId(null)
     if (ok) { toast.success('Comprovante anexado! 📎'); load() }
   }
+
+  // ── Parcelas personalizadas ──
+  const togglePersonalizarParcelas = () => {
+    if (parcelasCustom) { setParcelasCustom(null); return }
+    const n = Math.max(2, Math.min(120, parseInt(form.num_parcelas) || 2))
+    setParcelasCustom(gerarParcelas(n, form.valor, form.data_vencimento))
+  }
+
+  // Mantem a lista personalizada em sincronia quando muda a quantidade
+  const mudarNumParcelas = (novoValor: string) => {
+    setForm(f => ({ ...f, num_parcelas: novoValor }))
+    if (!parcelasCustom) return
+    const n = Math.max(1, Math.min(120, parseInt(novoValor) || 1))
+    const atual = parcelasCustom
+    if (n <= atual.length) { setParcelasCustom(atual.slice(0, n)); return }
+    const base = form.data_vencimento ? new Date(form.data_vencimento + 'T12:00:00') : null
+    const extras = Array.from({ length: n - atual.length }, (_, i) => ({
+      valor: form.valor,
+      data: base ? format(addMonths(base, atual.length + i), 'yyyy-MM-dd') : '',
+    }))
+    setParcelasCustom([...atual, ...extras])
+  }
+
+  const alterarParcela = (idx: number, campo: 'valor' | 'data', valor: string) => {
+    setParcelasCustom(prev => prev?.map((p, i) => (i === idx ? { ...p, [campo]: valor } : p)) ?? null)
+  }
+
+  // Recria a lista a partir do Valor e do Vencimento informados acima
+  const redistribuirParcelas = () => {
+    const n = parcelasCustom?.length ?? Math.max(2, parseInt(form.num_parcelas) || 2)
+    setParcelasCustom(gerarParcelas(n, form.valor, form.data_vencimento))
+    toast.success('Parcelas recalculadas com o valor e vencimento informados')
+  }
+
+  // Divide o valor do campo "Valor" como TOTAL entre as parcelas (ajusta centavos na ultima)
+  const dividirTotalEntreParcelas = () => {
+    const total = parseFloat(form.valor)
+    const n = parcelasCustom?.length ?? 0
+    if (!total || n === 0) { toast.error('Informe o valor total primeiro'); return }
+    const base = Math.floor((total / n) * 100) / 100
+    const resto = Math.round((total - base * n) * 100) / 100
+    setParcelasCustom(prev => prev?.map((p, i) => ({
+      ...p,
+      valor: String(i === n - 1 ? Math.round((base + resto) * 100) / 100 : base),
+    })) ?? null)
+    toast.success(`${formatCurrency(total)} dividido em ${n} parcelas`)
+  }
+
+  const totalParcelas = (parcelasCustom ?? []).reduce((s, p) => s + (parseFloat(p.valor) || 0), 0)
 
   // Escolha de arquivo dentro do modal de cadastro/edicao (sobe ao salvar)
   const handleModalAnexoPick = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -164,10 +224,11 @@ export default function DespesasPage() {
 
   useEffect(() => { load() }, [load])
 
-  const abrirNovo = () => { setEditando(null); setForm(emptyForm); setModalAnexoFile(null); setModalOpen(true) }
+  const abrirNovo = () => { setEditando(null); setForm(emptyForm); setModalAnexoFile(null); setParcelasCustom(null); setModalOpen(true) }
   const abrirEditar = (d: Despesa) => {
     setEditando(d)
     setModalAnexoFile(null)
+    setParcelasCustom(null)
     setForm({
       descricao: d.descricao, valor: String(d.valor), data_vencimento: d.data_vencimento,
       status: d.status, centro_custo_id: d.centro_custo_id ?? '', categoria_id: d.categoria_id ?? '',
@@ -182,6 +243,7 @@ export default function DespesasPage() {
   const duplicar = (d: Despesa) => {
     setEditando(null)
     setModalAnexoFile(null)
+    setParcelasCustom(null)
     setForm({
       descricao: d.descricao, valor: String(d.valor), data_vencimento: d.data_vencimento,
       status: 'pendente', centro_custo_id: d.centro_custo_id ?? '', categoria_id: d.categoria_id ?? '',
@@ -192,17 +254,33 @@ export default function DespesasPage() {
   }
 
   const salvar = async () => {
-    if (!form.descricao || !form.valor || !form.data_vencimento) { toast.error('Preencha os campos obrigatorios'); return }
+    // Com parcelas personalizadas o valor/vencimento vem de cada parcela,
+    // entao os campos do topo deixam de ser obrigatorios
+    const usandoParcelasCustom = !!parcelasCustom && form.parcelado && !editando
+    const faltaBase = usandoParcelasCustom
+      ? !form.descricao
+      : (!form.descricao || !form.valor || !form.data_vencimento)
+    if (faltaBase) { toast.error('Preencha os campos obrigatorios'); return }
     setSaving(true)
 
-    // ── Modo parcelas: cria N despesas mensais ──
+    // ── Modo parcelas: cria N despesas (valores/datas iguais ou personalizados) ──
     if (form.parcelado && !editando) {
       const n = Math.max(2, Math.min(120, parseInt(form.num_parcelas) || 2))
-      const baseDate = new Date(form.data_vencimento + 'T12:00:00')
-      const registros = Array.from({ length: n }, (_, i) => ({
-        descricao: `${form.descricao} (${i + 1}/${n})`,
-        valor: parseFloat(form.valor),
-        data_vencimento: format(addMonths(baseDate, i), 'yyyy-MM-dd'),
+      const lista = parcelasCustom ?? gerarParcelas(n, form.valor, form.data_vencimento)
+
+      // Valida cada parcela antes de criar (evita parcela sem valor ou sem data)
+      const invalida = lista.findIndex(p => !(parseFloat(p.valor) > 0) || !p.data)
+      if (invalida !== -1) {
+        setSaving(false)
+        toast.error(`Parcela ${invalida + 1}: informe valor maior que zero e vencimento`)
+        return
+      }
+
+      const total = lista.length
+      const registros = lista.map((p, i) => ({
+        descricao: `${form.descricao} (${i + 1}/${total})`,
+        valor: parseFloat(p.valor),
+        data_vencimento: p.data,
         status: 'pendente',
         centro_custo_id: form.centro_custo_id || null,
         categoria_id: form.categoria_id || null,
@@ -214,8 +292,9 @@ export default function DespesasPage() {
       const { error } = await supabase.from('despesas').insert(registros)
       setSaving(false)
       if (error) { toast.error('Erro ao criar parcelas'); return }
-      toast.success(`${n} parcelas criadas! (${form.descricao} 1/${n} até ${n}/${n})`)
-      setModalOpen(false); setForm(emptyForm); load()
+      const soma = lista.reduce((s, p) => s + parseFloat(p.valor), 0)
+      toast.success(`${total} parcelas criadas! Total ${formatCurrency(soma)}`)
+      setModalOpen(false); setForm(emptyForm); setParcelasCustom(null); load()
       return
     }
 
@@ -675,7 +754,10 @@ export default function DespesasPage() {
             <div className="col-span-1 sm:col-span-2 space-y-3">
               {/* Toggle Parcelado */}
               <div className={`rounded-2xl border-2 p-3 transition-all cursor-pointer ${form.parcelado ? 'border-indigo-400 bg-indigo-50' : 'border-slate-100 bg-slate-50'}`}
-                onClick={() => setForm(f => ({ ...f, parcelado: !f.parcelado, recorrente: false }))}>
+                onClick={() => {
+                  if (form.parcelado) setParcelasCustom(null)
+                  setForm(f => ({ ...f, parcelado: !f.parcelado, recorrente: false }))
+                }}>
                 <div className="flex items-center gap-3">
                   <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${form.parcelado ? 'bg-indigo-600 border-indigo-600' : 'border-slate-300'}`}>
                     {form.parcelado && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
@@ -686,30 +768,94 @@ export default function DespesasPage() {
                   </div>
                 </div>
                 {form.parcelado && (
-                  <div className="mt-3 flex items-center gap-3" onClick={e => e.stopPropagation()}>
-                    <div className="flex-1">
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Numero de parcelas</label>
-                      <div className="flex items-center gap-2">
-                        <button type="button" onClick={() => setForm(f => ({ ...f, num_parcelas: String(Math.max(2, parseInt(f.num_parcelas) - 1)) }))}
-                          className="w-8 h-8 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold flex items-center justify-center hover:bg-slate-100">−</button>
-                        <input type="number" min={2} max={120}
-                          className="w-16 text-center px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-                          value={form.num_parcelas}
-                          onChange={e => setForm(f => ({ ...f, num_parcelas: e.target.value }))} />
-                        <button type="button" onClick={() => setForm(f => ({ ...f, num_parcelas: String(Math.min(120, parseInt(f.num_parcelas) + 1)) }))}
-                          className="w-8 h-8 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold flex items-center justify-center hover:bg-slate-100">+</button>
-                        <span className="text-xs text-slate-500">parcelas mensais</span>
+                  <div className="mt-3 space-y-3" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <div className="flex-1 min-w-[220px]">
+                        <label className="block text-xs font-medium text-slate-600 mb-1">Numero de parcelas</label>
+                        <div className="flex items-center gap-2">
+                          <button type="button" onClick={() => mudarNumParcelas(String(Math.max(2, parseInt(form.num_parcelas) - 1)))}
+                            className="w-8 h-8 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold flex items-center justify-center hover:bg-slate-100">−</button>
+                          <input type="number" min={2} max={120}
+                            className="w-16 text-center px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                            value={form.num_parcelas}
+                            onChange={e => mudarNumParcelas(e.target.value)} />
+                          <button type="button" onClick={() => mudarNumParcelas(String(Math.min(120, parseInt(form.num_parcelas) + 1)))}
+                            className="w-8 h-8 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold flex items-center justify-center hover:bg-slate-100">+</button>
+                          <span className="text-xs text-slate-500">parcelas mensais</span>
+                        </div>
                       </div>
+                      {!parcelasCustom && (
+                        <div className="bg-white border border-indigo-100 rounded-xl px-3 py-2 text-center">
+                          <p className="text-xs text-slate-400">Valor por parcela</p>
+                          <p className="text-sm font-bold text-indigo-600">
+                            {form.valor ? formatCurrency(parseFloat(form.valor)) : 'R$ —'}
+                          </p>
+                          <p className="text-xs text-slate-400 mt-0.5">
+                            Total: {form.valor ? formatCurrency(parseFloat(form.valor) * (parseInt(form.num_parcelas) || 0)) : '—'}
+                          </p>
+                        </div>
+                      )}
                     </div>
-                    <div className="bg-white border border-indigo-100 rounded-xl px-3 py-2 text-center">
-                      <p className="text-xs text-slate-400">Valor por parcela</p>
-                      <p className="text-sm font-bold text-indigo-600">
-                        {form.valor ? formatCurrency(parseFloat(form.valor)) : 'R$ —'}
-                      </p>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        Total: {form.valor ? formatCurrency(parseFloat(form.valor) * (parseInt(form.num_parcelas) || 0)) : '—'}
-                      </p>
-                    </div>
+
+                    {/* Toggle: valores iguais x personalizados */}
+                    <button
+                      type="button"
+                      onClick={togglePersonalizarParcelas}
+                      className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
+                        parcelasCustom ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${parcelasCustom ? 'bg-white border-white' : 'border-slate-300'}`}>
+                        {parcelasCustom && <svg className="w-3 h-3 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
+                      </span>
+                      Personalizar valor e vencimento de cada parcela
+                    </button>
+
+                    {/* Lista editavel de parcelas */}
+                    {parcelasCustom && (
+                      <div className="bg-white border border-indigo-100 rounded-xl p-3 space-y-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button type="button" onClick={dividirTotalEntreParcelas}
+                            className="px-2.5 py-1.5 rounded-lg bg-indigo-50 text-indigo-600 text-[11px] font-semibold hover:bg-indigo-100 transition-colors">
+                            Dividir o Valor como total
+                          </button>
+                          <button type="button" onClick={redistribuirParcelas}
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-[11px] font-semibold hover:bg-slate-200 transition-colors">
+                            Repetir Valor em todas
+                          </button>
+                        </div>
+
+                        <div className="max-h-64 overflow-y-auto space-y-2 pr-0.5">
+                          {parcelasCustom.map((p, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                              <span className="w-10 flex-shrink-0 text-[11px] font-bold text-slate-400 text-center">
+                                {i + 1}/{parcelasCustom.length}
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <CurrencyInput
+                                  value={p.valor}
+                                  onChange={e => alterarParcela(i, 'valor', e.target.value)}
+                                  placeholder="0,00"
+                                />
+                              </div>
+                              <input
+                                type="date"
+                                className="w-36 flex-shrink-0 px-2 py-2 bg-white border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                                value={p.data}
+                                onChange={e => alterarParcela(i, 'data', e.target.value)}
+                              />
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                          <span className="text-xs text-slate-500">{parcelasCustom.length} parcelas</span>
+                          <span className="text-sm font-bold text-indigo-700">
+                            Total: {formatCurrency(totalParcelas)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -813,7 +959,7 @@ export default function DespesasPage() {
         <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-slate-100">
           <Button variant="secondary" onClick={() => setModalOpen(false)}>Cancelar</Button>
           <Button onClick={salvar} disabled={saving}>
-            {saving ? 'Salvando...' : editando ? 'Salvar alteracoes' : form.parcelado ? `Criar ${form.num_parcelas || '?'} parcelas` : 'Cadastrar Conta'}
+            {saving ? 'Salvando...' : editando ? 'Salvar alteracoes' : form.parcelado ? `Criar ${parcelasCustom ? parcelasCustom.length : (form.num_parcelas || '?')} parcelas` : 'Cadastrar Conta'}
           </Button>
         </div>
       </Modal>
