@@ -19,19 +19,20 @@ import {
 import type { Lancamento, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
 import { format, startOfMonth, endOfMonth } from 'date-fns'
 
-type ColKey = 'data' | 'descricao' | 'tipo' | 'valor' | 'forma' | 'conta' | 'categoria' | 'centro' | 'conciliado'
+type ColKey = 'data' | 'descricao' | 'tipo' | 'valor' | 'saldo' | 'forma' | 'conta' | 'categoria' | 'centro' | 'conciliado'
 const COLS: { key: ColKey; label: string; align: 'left' | 'right' }[] = [
   { key: 'data', label: 'Data', align: 'left' },
   { key: 'descricao', label: 'Descricao', align: 'left' },
   { key: 'tipo', label: 'Tipo', align: 'left' },
   { key: 'valor', label: 'Valor', align: 'right' },
+  { key: 'saldo', label: 'Saldo', align: 'right' },
   { key: 'forma', label: 'Forma', align: 'left' },
   { key: 'conta', label: 'Conta', align: 'left' },
   { key: 'categoria', label: 'Categoria', align: 'left' },
   { key: 'centro', label: 'Centro de Custo', align: 'left' },
   { key: 'conciliado', label: 'Conciliado', align: 'left' },
 ]
-const DEFAULT_COLS: ColKey[] = ['data', 'descricao', 'tipo', 'valor', 'forma', 'conta', 'categoria', 'conciliado']
+const DEFAULT_COLS: ColKey[] = ['data', 'descricao', 'tipo', 'valor', 'saldo', 'forma', 'conta', 'categoria', 'conciliado']
 
 interface FormData {
   descricao: string
@@ -69,6 +70,8 @@ export default function LancamentosPage() {
   const [filtroConta, setFiltroConta] = useState('')
   const [mesFiltro, setMesFiltro] = useState(format(new Date(), 'yyyy-MM'))
   const [cols, setCols] = useState<Set<ColKey>>(new Set(DEFAULT_COLS))
+  // Extrato: do inicio do mes para o fim (crescente), como no extrato bancario
+  const [ordem, setOrdem] = useState<'asc' | 'desc'>('asc')
   const [colMenuOpen, setColMenuOpen] = useState(false)
   const [priorLancs, setPriorLancs] = useState<Pick<Lancamento, 'valor' | 'tipo' | 'conta_bancaria_id' | 'centro_custo_id' | 'categoria_id'>[]>([])
 
@@ -163,12 +166,13 @@ export default function LancamentosPage() {
 
   const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
 
-  const pdfCell = (l: Lancamento, key: ColKey): string => {
+  const pdfCell = (l: Lancamento, key: ColKey, saldoAcum: number): string => {
     switch (key) {
       case 'data': return formatDate(l.data)
       case 'descricao': return esc(l.descricao)
       case 'tipo': return `<span style="color:${l.tipo === 'entrada' ? '#16a34a' : '#dc2626'}">${l.tipo === 'entrada' ? 'Entrada' : 'Saida'}</span>`
       case 'valor': return `<span style="font-weight:600;color:${l.tipo === 'entrada' ? '#16a34a' : '#dc2626'}">${l.tipo === 'entrada' ? '+' : '-'}${formatCurrency(Number(l.valor))}</span>`
+      case 'saldo': return `<span style="font-weight:600;color:${saldoAcum >= 0 ? '#334155' : '#dc2626'}">${formatCurrency(saldoAcum)}</span>`
       case 'forma': return esc(getFormaPagamentoLabel(l.forma_pagamento))
       case 'conta': return esc((l as any).contas_bancarias?.nome ?? '—')
       case 'categoria': return esc((l as any).categorias?.nome ?? '—')
@@ -177,7 +181,7 @@ export default function LancamentosPage() {
     }
   }
 
-  const tableCell = (l: Lancamento, key: ColKey) => {
+  const tableCell = (l: Lancamento, key: ColKey, saldoAcum: number) => {
     switch (key) {
       case 'data': return <span className="text-slate-600 whitespace-nowrap">{formatDate(l.data)}</span>
       case 'descricao': return (
@@ -194,6 +198,11 @@ export default function LancamentosPage() {
       case 'valor': return (
         <span className={`font-bold whitespace-nowrap ${l.tipo === 'entrada' ? 'text-green-600' : 'text-red-600'}`}>
           {l.tipo === 'entrada' ? '+' : '-'}{formatCurrency(Number(l.valor))}
+        </span>
+      )
+      case 'saldo': return (
+        <span className={`font-semibold whitespace-nowrap ${saldoAcum >= 0 ? 'text-slate-700' : 'text-red-600'}`}>
+          {formatCurrency(saldoAcum)}
         </span>
       )
       case 'forma': return <span className="text-slate-600 text-xs whitespace-nowrap">{getFormaPagamentoLabel(l.forma_pagamento)}</span>
@@ -221,8 +230,8 @@ export default function LancamentosPage() {
     ].filter(Boolean).map(t => esc(t as string)).join(' &nbsp;|&nbsp; ')
 
     const thHtml = pdfCols.map(c => `<th style="text-align:${c.align}">${c.label}</th>`).join('')
-    const linhas = filtrados.map(l => `<tr>${
-      pdfCols.map(c => `<td style="text-align:${c.align}">${pdfCell(l, c.key)}</td>`).join('')
+    const linhasHtml = linhas.map(({ l, saldoAcum }) => `<tr>${
+      pdfCols.map(c => `<td style="text-align:${c.align}">${pdfCell(l, c.key, saldoAcum)}</td>`).join('')
     }</tr>`).join('')
 
     const html = `
@@ -258,7 +267,7 @@ export default function LancamentosPage() {
       </div>
       <table>
         <thead><tr>${thHtml}</tr></thead>
-        <tbody>${linhas}</tbody>
+        <tbody>${linhasHtml}</tbody>
       </table>
       <p class="footer">Total: ${filtrados.length} lancamento(s)</p>
       </body></html>
@@ -299,6 +308,22 @@ export default function LancamentosPage() {
     .reduce((s, l) => s + (l.tipo === 'entrada' ? Number(l.valor) : -Number(l.valor)), 0)
   const saldoInicial = saldoInicialContas + priorDelta
   const saldoFinal   = saldoInicial + saldo
+
+  // Saldo corrido linha a linha (igual extrato bancario): sempre calculado em
+  // ordem cronologica crescente a partir do saldo inicial. A ordem de exibicao
+  // so inverte a lista depois — o saldo de cada linha continua correto.
+  const linhasAsc = (() => {
+    const asc = [...filtrados].sort((a, b) => {
+      if (a.data !== b.data) return a.data < b.data ? -1 : 1
+      return (a.created_at ?? '') < (b.created_at ?? '') ? -1 : 1
+    })
+    let acumulado = saldoInicial
+    return asc.map(l => {
+      acumulado += l.tipo === 'entrada' ? Number(l.valor) : -Number(l.valor)
+      return { l, saldoAcum: acumulado }
+    })
+  })()
+  const linhas = ordem === 'asc' ? linhasAsc : [...linhasAsc].reverse()
 
   const categoriasForm = form.tipo === 'entrada'
     ? categorias.filter(c => c.tipo === 'entrada')
@@ -422,7 +447,15 @@ export default function LancamentosPage() {
                 Limpar
               </button>
             )}
-            <div className="relative ml-auto">
+            <button
+              onClick={() => setOrdem(o => (o === 'asc' ? 'desc' : 'asc'))}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all ml-auto"
+              title="Inverter a ordem do extrato"
+            >
+              <ArrowUpDown size={14} />
+              {ordem === 'asc' ? 'Mais antigo primeiro' : 'Mais recente primeiro'}
+            </button>
+            <div className="relative">
               <button
                 onClick={() => setColMenuOpen(o => !o)}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all"
@@ -486,10 +519,10 @@ export default function LancamentosPage() {
                     <p className="text-slate-400 text-xs mt-1">Use os botoes Entrada ou Saida para registrar</p>
                   </td>
                 </tr>
-              ) : filtrados.map(l => (
+              ) : linhas.map(({ l, saldoAcum }) => (
                 <tr key={l.id} className="hover:bg-slate-50/80 transition-colors group">
                   {COLS.filter(c => cols.has(c.key)).map(c => (
-                    <td key={c.key} className={`px-4 py-3 ${c.align === 'right' ? 'text-right' : ''}`}>{tableCell(l, c.key)}</td>
+                    <td key={c.key} className={`px-4 py-3 ${c.align === 'right' ? 'text-right' : ''}`}>{tableCell(l, c.key, saldoAcum)}</td>
                   ))}
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -521,7 +554,7 @@ export default function LancamentosPage() {
             <MobileCard><p className="text-center text-slate-400 py-8">Carregando...</p></MobileCard>
           ) : filtrados.length === 0 ? (
             <MobileCard><p className="text-center text-slate-400 py-8">Nenhum lancamento encontrado</p></MobileCard>
-          ) : filtrados.map(l => (
+          ) : linhas.map(({ l, saldoAcum }) => (
             <MobileCard key={l.id}>
               <div className="flex items-start justify-between gap-2 mb-1.5">
                 <div className="flex-1 min-w-0">
@@ -554,6 +587,11 @@ export default function LancamentosPage() {
                   <p className={`text-base font-bold ${l.tipo === 'entrada' ? 'text-green-600' : 'text-red-600'}`}>
                     {l.tipo === 'entrada' ? '+' : '-'}{formatCurrency(Number(l.valor))}
                   </p>
+                  {cols.has('saldo') && (
+                    <p className={`text-[11px] font-semibold ${saldoAcum >= 0 ? 'text-slate-500' : 'text-red-500'}`}>
+                      Saldo: {formatCurrency(saldoAcum)}
+                    </p>
+                  )}
                   <Badge variant={l.conciliado ? 'success' : 'neutral'} className="text-[10px]">
                     {l.conciliado ? 'Conciliado' : 'Nao concil.'}
                   </Badge>
