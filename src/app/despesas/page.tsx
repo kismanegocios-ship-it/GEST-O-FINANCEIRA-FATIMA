@@ -18,7 +18,22 @@ import {
   Paperclip, Eye, X, Loader2, Copy
 } from 'lucide-react'
 import type { Despesa, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
-import { format, addMonths } from 'date-fns'
+import { format, addMonths, addDays, startOfMonth, endOfMonth } from 'date-fns'
+
+// Quantos meses a frente as contas recorrentes sao provisionadas
+const HORIZONTE_MESES = 3
+
+// Proxima data de uma serie recorrente conforme a frequencia
+function proximaDataRecorrencia(dateStr: string, freq: string): Date {
+  const d = new Date(dateStr + 'T12:00:00')
+  switch (freq) {
+    case 'semanal': return addDays(d, 7)
+    case 'quinzenal': return addDays(d, 15)
+    case 'anual': return addMonths(d, 12)
+    case 'mensal':
+    default: return addMonths(d, 1)
+  }
+}
 
 const STATUS_OPTIONS = ['todos', 'pendente', 'pago', 'vencido', 'cancelado']
 
@@ -198,6 +213,60 @@ export default function DespesasPage() {
     load()
   }
 
+  // Provisiona as proximas ocorrencias das contas recorrentes ate o horizonte.
+  // Cada "modelo" (recorrente = true) gera contas comuns (recorrente = false)
+  // vinculadas por recorrencia_id, evitando duplicar datas ja existentes.
+  const provisionarRecorrencias = async () => {
+    const { data: templates, error } = await supabase
+      .from('despesas').select('*').eq('recorrente', true).neq('status', 'cancelado')
+    if (error || !templates || templates.length === 0) return
+
+    const hojeD = new Date()
+    const inicioMes = startOfMonth(hojeD)
+    const horizonte = endOfMonth(addMonths(hojeD, HORIZONTE_MESES))
+    const novos: Record<string, unknown>[] = []
+
+    for (const t of templates as Despesa[]) {
+      const freq = t.frequencia || 'mensal'
+      const { data: filhos, error: fErr } = await supabase
+        .from('despesas').select('data_vencimento').eq('recorrencia_id', t.id)
+      if (fErr) return // coluna recorrencia_id ainda nao existe (rodar migration 005)
+
+      const existentes = new Set<string>([t.data_vencimento, ...((filhos ?? []).map(f => f.data_vencimento as string))])
+      let ultima = t.data_vencimento
+      for (const dd of existentes) if (dd > ultima) ultima = dd
+
+      let cursor = proximaDataRecorrencia(ultima, freq)
+      let guard = 0
+      while (cursor <= horizonte && guard < 2000) {
+        guard++
+        const key = format(cursor, 'yyyy-MM-dd')
+        // So provisiona a partir do mes atual (nao recria meses ja passados)
+        if (!existentes.has(key) && cursor >= inicioMes) {
+          existentes.add(key)
+          novos.push({
+            descricao: t.descricao,
+            valor: t.valor,
+            data_vencimento: key,
+            status: 'pendente',
+            centro_custo_id: t.centro_custo_id ?? null,
+            categoria_id: t.categoria_id ?? null,
+            recorrente: false,
+            frequencia: null,
+            observacoes: t.observacoes ?? null,
+            solicitante: t.solicitante ?? null,
+            recorrencia_id: t.id,
+          })
+        }
+        cursor = proximaDataRecorrencia(key, freq)
+      }
+    }
+
+    if (novos.length > 0) {
+      await supabase.from('despesas').insert(novos)
+    }
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
 
@@ -208,6 +277,9 @@ export default function DespesasPage() {
       .update({ status: 'vencido' })
       .eq('status', 'pendente')
       .lt('data_vencimento', hoje)
+
+    // Gera as ocorrencias futuras das contas recorrentes (idempotente)
+    await provisionarRecorrencias()
 
     const [d, cc, cat, cb] = await Promise.all([
       supabase.from('despesas').select('*, centros_custo(*), categorias(*)').order('data_vencimento'),
@@ -869,7 +941,7 @@ export default function DespesasPage() {
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-slate-700">Recorrente</p>
-                    <p className="text-xs text-slate-400">Despesa fixa mensal, quinzenal ou anual — cancele quando quiser</p>
+                    <p className="text-xs text-slate-400">Gera as proximas contas automaticamente ({HORIZONTE_MESES} meses a frente). Pare quando quiser desmarcando o recorrente.</p>
                   </div>
                 </div>
                 {form.recorrente && (
