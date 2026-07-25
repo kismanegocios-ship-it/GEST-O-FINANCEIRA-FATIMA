@@ -15,7 +15,7 @@ import { toast } from 'sonner'
 import {
   Plus, Search, Calendar, CheckCircle, XCircle, Trash2,
   Pencil, Filter, RefreshCw, DollarSign, ChevronRight,
-  Paperclip, Eye, X, Loader2, Copy
+  Paperclip, Eye, X, Loader2, Copy, RotateCcw
 } from 'lucide-react'
 import type { Despesa, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
 import { format, addMonths, addDays, startOfMonth, endOfMonth } from 'date-fns'
@@ -215,11 +215,21 @@ export default function DespesasPage() {
 
   // Provisiona as proximas ocorrencias das contas recorrentes ate o horizonte.
   // Cada "modelo" (recorrente = true) gera contas comuns (recorrente = false)
-  // vinculadas por recorrencia_id, evitando duplicar datas ja existentes.
+  // com a MESMA descricao nas datas seguintes. Dedup por descricao + data
+  // (nao depende de coluna extra no banco), e so estende pra frente.
   const provisionarRecorrencias = async () => {
     const { data: templates, error } = await supabase
       .from('despesas').select('*').eq('recorrente', true).neq('status', 'cancelado')
     if (error || !templates || templates.length === 0) return
+
+    // Mapa descricao -> conjunto de datas ja existentes (qualquer despesa)
+    const { data: todas } = await supabase.from('despesas').select('descricao, data_vencimento')
+    const porDesc = new Map<string, Set<string>>()
+    for (const r of (todas ?? []) as { descricao: string; data_vencimento: string }[]) {
+      const set = porDesc.get(r.descricao) ?? new Set<string>()
+      set.add(r.data_vencimento)
+      porDesc.set(r.descricao, set)
+    }
 
     const hojeD = new Date()
     const inicioMes = startOfMonth(hojeD)
@@ -228,11 +238,7 @@ export default function DespesasPage() {
 
     for (const t of templates as Despesa[]) {
       const freq = t.frequencia || 'mensal'
-      const { data: filhos, error: fErr } = await supabase
-        .from('despesas').select('data_vencimento').eq('recorrencia_id', t.id)
-      if (fErr) return // coluna recorrencia_id ainda nao existe (rodar migration 005)
-
-      const existentes = new Set<string>([t.data_vencimento, ...((filhos ?? []).map(f => f.data_vencimento as string))])
+      const existentes = porDesc.get(t.descricao) ?? new Set<string>([t.data_vencimento])
       let ultima = t.data_vencimento
       for (const dd of existentes) if (dd > ultima) ultima = dd
 
@@ -255,11 +261,11 @@ export default function DespesasPage() {
             frequencia: null,
             observacoes: t.observacoes ?? null,
             solicitante: t.solicitante ?? null,
-            recorrencia_id: t.id,
           })
         }
         cursor = proximaDataRecorrencia(key, freq)
       }
+      porDesc.set(t.descricao, existentes)
     }
 
     if (novos.length > 0) {
@@ -463,6 +469,23 @@ export default function DespesasPage() {
   const cancelar = async (id: string) => { await supabase.from('despesas').update({ status: 'cancelado' }).eq('id', id); toast.success('Cancelada'); load() }
   const excluir = async (id: string) => { await supabase.from('despesas').delete().eq('id', id); toast.success('Excluida'); load() }
 
+  // Estorna o pagamento: apaga o lancamento no caixa e volta a conta para
+  // pendente/vencida, pra poder corrigir e pagar de novo.
+  const estornarPagamento = async (d: Despesa) => {
+    if (d.status !== 'pago') return
+    if (!confirm(`Estornar o pagamento de "${d.descricao}"?\n\nA conta volta para pendente e o lancamento no caixa (Lancamentos) sera removido.`)) return
+    // Remove o(s) lancamento(s) de caixa gerados por essa despesa
+    const { error: lErr } = await supabase.from('lancamentos').delete().eq('despesa_id', d.id)
+    if (lErr) { toast.error('Erro ao remover o lancamento: ' + lErr.message); return }
+    const hoje = format(new Date(), 'yyyy-MM-dd')
+    const novoStatus = d.data_vencimento < hoje ? 'vencido' : 'pendente'
+    const { error } = await supabase.from('despesas')
+      .update({ status: novoStatus, data_pagamento: null }).eq('id', d.id)
+    if (error) { toast.error('Erro ao estornar: ' + error.message); return }
+    toast.success(`Pagamento estornado. Conta voltou para ${novoStatus === 'vencido' ? 'vencida' : 'pendente'} e saiu do caixa.`)
+    load()
+  }
+
   const filtradas = despesas.filter(d => {
     const mb = d.descricao.toLowerCase().includes(busca.toLowerCase())
     const ms = filtroStatus === 'todos' || d.status === filtroStatus
@@ -619,6 +642,9 @@ export default function DespesasPage() {
                         <button onClick={() => { setModalPagar(d); setDataPagamento(format(new Date(), 'yyyy-MM-dd')); setPagContaId(''); setPagForma('pix'); setPagDesconto(''); setPagJuros('') }} className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title="Pagar"><CheckCircle size={14} /></button>
                         <a href={googleCalendarLink({ title: `Pagar: ${d.descricao}`, date: d.data_vencimento, description: `Valor: ${formatCurrency(Number(d.valor))}` })} target="_blank" rel="noopener noreferrer" className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-500 transition-colors" title="Google Agenda"><Calendar size={14} /></a>
                       </>}
+                      {d.status === 'pago' && (
+                        <button onClick={() => estornarPagamento(d)} className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-500 hover:text-amber-600 transition-colors" title="Estornar pagamento (volta para pendente e sai do caixa)"><RotateCcw size={14} /></button>
+                      )}
                       {anexoBusyId === d.id ? (
                         <span className="p-1.5 text-slate-400"><Loader2 size={14} className="animate-spin" /></span>
                       ) : d.anexo_path ? (
@@ -698,6 +724,14 @@ export default function DespesasPage() {
                       className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-green-100 text-green-700 rounded-xl text-xs font-semibold hover:bg-green-200 transition-colors"
                     >
                       <CheckCircle size={13} /> Marcar Pago
+                    </button>
+                  )}
+                  {d.status === 'pago' && (
+                    <button
+                      onClick={() => estornarPagamento(d)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-amber-100 text-amber-700 rounded-xl text-xs font-semibold hover:bg-amber-200 transition-colors"
+                    >
+                      <RotateCcw size={13} /> Estornar
                     </button>
                   )}
                   <button
