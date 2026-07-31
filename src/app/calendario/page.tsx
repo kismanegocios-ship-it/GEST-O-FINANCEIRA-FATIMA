@@ -65,6 +65,7 @@ function gerarICS(despesas: Despesa[]): string {
 export default function CalendarioPage() {
   const [mes, setMes] = useState(new Date())
   const [despesas, setDespesas] = useState<Despesa[]>([])
+  const [proximas, setProximas] = useState<Despesa[]>([])
   const [loading, setLoading] = useState(true)
   const [diaSelecionado, setDiaSelecionado] = useState<Date | null>(null)
   const [baseUrl, setBaseUrl] = useState('')
@@ -84,13 +85,21 @@ export default function CalendarioPage() {
 
     const ini = format(startOfMonth(mes), 'yyyy-MM-dd')
     const fim = format(endOfMonth(mes), 'yyyy-MM-dd')
-    const { data } = await supabase
-      .from('despesas')
-      .select('*, categorias(*), centros_custo(*)')
-      .gte('data_vencimento', ini)
-      .lte('data_vencimento', fim)
-      .order('data_vencimento')
-    setDespesas((data ?? []) as Despesa[])
+    // Proximos vencimentos: atrasados + pendentes ate 3 meses a frente
+    const horizonte = format(endOfMonth(addMonths(new Date(), 3)), 'yyyy-MM-dd')
+    const [mesRes, proxRes] = await Promise.all([
+      supabase.from('despesas')
+        .select('*, categorias(*), centros_custo(*)')
+        .gte('data_vencimento', ini).lte('data_vencimento', fim)
+        .order('data_vencimento'),
+      supabase.from('despesas')
+        .select('*, categorias(*), centros_custo(*)')
+        .in('status', ['pendente', 'vencido'])
+        .lte('data_vencimento', horizonte)
+        .order('data_vencimento'),
+    ])
+    setDespesas((mesRes.data ?? []) as Despesa[])
+    setProximas((proxRes.data ?? []) as Despesa[])
     setLoading(false)
   }, [mes])
 
@@ -109,17 +118,17 @@ export default function CalendarioPage() {
   const totalPago     = pagas.reduce((s, d) => s + Number(d.valor), 0)
 
   const exportarICS = () => {
-    const pendentesEVencidas = despesas.filter(d => ['pendente', 'vencido'].includes(d.status))
-    if (pendentesEVencidas.length === 0) { toast.info('Nenhuma despesa pendente este mes'); return }
-    const ics = gerarICS(pendentesEVencidas)
+    // Exporta TODOS os vencimentos futuros (atrasados + ate 3 meses), nao so o mes na tela
+    if (proximas.length === 0) { toast.info('Nenhuma conta pendente ou vencida a exportar'); return }
+    const ics = gerarICS(proximas)
     const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `vencimentos-${format(mes, 'yyyy-MM')}.ics`
+    a.download = `vencimentos-fatima.ics`
     a.click()
     URL.revokeObjectURL(url)
-    toast.success('Arquivo .ics baixado! Importe no Google Agenda.')
+    toast.success(`${proximas.length} vencimento(s) exportados! Importe no Google Agenda.`)
   }
 
   const copiarSubscribeUrl = () => {
@@ -466,6 +475,59 @@ export default function CalendarioPage() {
                     )
                   })}
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Proximos vencimentos (atrasados + 3 meses) — nao preso ao mes na tela */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm">Proximos vencimentos</CardTitle>
+                <span className="text-[11px] text-slate-400">atrasados + 3 meses</span>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0 max-h-80 overflow-y-auto scrollbar-thin px-3">
+              {proximas.length === 0 ? (
+                <div className="text-center py-4">
+                  <CheckCircle className="w-8 h-8 text-emerald-300 mx-auto mb-2" />
+                  <p className="text-slate-400 text-sm">Nada a vencer!</p>
+                </div>
+              ) : (
+                (() => {
+                  const grupos = new Map<string, Despesa[]>()
+                  for (const d of proximas) {
+                    const k = (d.data_vencimento ?? '').slice(0, 7)
+                    const arr = grupos.get(k); if (arr) arr.push(d); else grupos.set(k, [d])
+                  }
+                  return Array.from(grupos.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([k, itens]) => {
+                    const [ano, m] = k.split('-').map(Number)
+                    const total = itens.reduce((s, d) => s + Number(d.valor), 0)
+                    return (
+                      <div key={k} className="mb-2">
+                        <div className="flex items-center justify-between px-1 py-1 sticky top-0 bg-white">
+                          <span className="text-[11px] font-bold text-slate-500 capitalize">{format(new Date(ano, m - 1, 1), "MMMM/yyyy", { locale: ptBR })}</span>
+                          <span className="text-[11px] font-bold text-slate-700">{formatCurrency(total)}</span>
+                        </div>
+                        <div className="space-y-1">
+                          {itens.map(d => {
+                            const cfg = STATUS_CONFIG[d.status as keyof typeof STATUS_CONFIG]
+                            return (
+                              <div key={d.id} className="flex items-center gap-2.5 p-2 rounded-xl hover:bg-slate-50 transition-colors">
+                                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg?.dot}`} />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-semibold text-slate-700 truncate leading-tight">{d.descricao}</p>
+                                  <p className="text-xs text-slate-400">{formatDate(d.data_vencimento)}{d.status === 'vencido' ? ' · vencida' : ''}</p>
+                                </div>
+                                <span className="text-xs font-bold text-slate-700 flex-shrink-0">{formatCurrency(Number(d.valor))}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })
+                })()
               )}
             </CardContent>
           </Card>
