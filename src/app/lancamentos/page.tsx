@@ -17,7 +17,7 @@ import {
   RefreshCw, Pencil, FileDown, ArrowUpDown, Columns3, Check,
 } from 'lucide-react'
 import type { Lancamento, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
-import { format, startOfMonth, endOfMonth } from 'date-fns'
+import { format, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns'
 
 type ColKey = 'data' | 'descricao' | 'tipo' | 'valor' | 'saldo' | 'forma' | 'conta' | 'categoria' | 'centro' | 'conciliado'
 const COLS: { key: ColKey; label: string; align: 'left' | 'right' }[] = [
@@ -65,10 +65,14 @@ export default function LancamentosPage() {
   const [saving, setSaving] = useState(false)
   const [busca, setBusca] = useState('')
   const [filtroTipo, setFiltroTipo] = useState<'todos' | 'entrada' | 'saida'>('todos')
-  const [filtroCentro, setFiltroCentro] = useState('')
-  const [filtroCategoria, setFiltroCategoria] = useState('')
+  const [filtroCentros, setFiltroCentros] = useState<Set<string>>(new Set())
+  const [filtroCategorias, setFiltroCategorias] = useState<Set<string>>(new Set())
   const [filtroConta, setFiltroConta] = useState('')
-  const [mesFiltro, setMesFiltro] = useState(format(new Date(), 'yyyy-MM'))
+  // Periodo (De/Ate) — padrao: mes atual
+  const [dataIni, setDataIni] = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'))
+  const [dataFim, setDataFim] = useState(format(endOfMonth(new Date()), 'yyyy-MM-dd'))
+  const [centroMenuOpen, setCentroMenuOpen] = useState(false)
+  const [categoriaMenuOpen, setCategoriaMenuOpen] = useState(false)
   const [cols, setCols] = useState<Set<ColKey>>(new Set(DEFAULT_COLS))
   // Extrato: do inicio do mes para o fim (crescente), como no extrato bancario
   const [ordem, setOrdem] = useState<'asc' | 'desc'>('asc')
@@ -77,12 +81,8 @@ export default function LancamentosPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [ano, mes] = mesFiltro.split('-').map(Number)
-    const mesDate = new Date(ano, mes - 1, 1)
-    const [ini, fim] = [
-      format(startOfMonth(mesDate), 'yyyy-MM-dd'),
-      format(endOfMonth(mesDate), 'yyyy-MM-dd'),
-    ]
+    const ini = dataIni
+    const fim = dataFim
     const [l, cc, cat, cb, prior] = await Promise.all([
       supabase.from('lancamentos')
         .select('*, centros_custo(*), categorias(*), contas_bancarias(*)')
@@ -100,9 +100,29 @@ export default function LancamentosPage() {
     setContas((cb.data ?? []) as ContaBancaria[])
     setPriorLancs((prior.data ?? []) as typeof priorLancs)
     setLoading(false)
-  }, [mesFiltro])
+  }, [dataIni, dataFim])
 
   useEffect(() => { load() }, [load])
+
+  const setPeriodo = (ini: Date, fim: Date) => {
+    setDataIni(format(ini, 'yyyy-MM-dd'))
+    setDataFim(format(fim, 'yyyy-MM-dd'))
+  }
+  const hojeRef = new Date()
+  const presets = [
+    { label: 'Este mes', on: () => setPeriodo(startOfMonth(hojeRef), endOfMonth(hojeRef)) },
+    { label: 'Mes passado', on: () => { const m = subMonths(hojeRef, 1); setPeriodo(startOfMonth(m), endOfMonth(m)) } },
+    { label: 'Ultimos 3 meses', on: () => setPeriodo(startOfMonth(subMonths(hojeRef, 2)), endOfMonth(hojeRef)) },
+    { label: 'Este ano', on: () => setPeriodo(startOfYear(hojeRef), endOfYear(hojeRef)) },
+  ]
+
+  const toggleSetItem = (setter: React.Dispatch<React.SetStateAction<Set<string>>>, id: string) => {
+    setter(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
 
   const abrirNovo = (tipo?: 'entrada' | 'saida') => {
     setEditando(null)
@@ -216,15 +236,17 @@ export default function LancamentosPage() {
   }
 
   const exportarPDF = () => {
-    const [ano, mes] = mesFiltro.split('-').map(Number)
-    const mesNome = new Date(ano, mes - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+    const periodoNome = `${formatDate(dataIni)} a ${formatDate(dataFim)}`
     const pdfCols = COLS.filter(c => cols.has(c.key))
+
+    const nomesCentros = centros.filter(c => filtroCentros.has(c.id)).map(c => c.nome)
+    const nomesCategorias = categorias.filter(c => filtroCategorias.has(c.id)).map(c => c.nome)
 
     // Linha do escopo/filtros aplicados, pra quem recebe entender o recorte
     const escopo = [
       filtroConta && `Conta: ${contas.find(c => c.id === filtroConta)?.nome ?? ''}`,
-      filtroCentro && `Centro: ${centros.find(c => c.id === filtroCentro)?.nome ?? ''}`,
-      filtroCategoria && `Categoria: ${categorias.find(c => c.id === filtroCategoria)?.nome ?? ''}`,
+      nomesCentros.length > 0 && `Centros: ${nomesCentros.join(', ')}`,
+      nomesCategorias.length > 0 && `Categorias: ${nomesCategorias.join(', ')}`,
       filtroTipo !== 'todos' && `Tipo: ${filtroTipo === 'entrada' ? 'Entradas' : 'Saidas'}`,
       busca && `Busca: "${busca}"`,
     ].filter(Boolean).map(t => esc(t as string)).join(' &nbsp;|&nbsp; ')
@@ -236,7 +258,7 @@ export default function LancamentosPage() {
 
     const html = `
       <!DOCTYPE html><html lang="pt-BR"><head>
-      <meta charset="UTF-8"><title>Extrato de Lancamentos – ${mesNome}</title>
+      <meta charset="UTF-8"><title>Extrato de Lancamentos – ${periodoNome}</title>
       <style>
         body { font-family: Arial, sans-serif; font-size: 11px; color: #1e293b; margin: 24px; }
         h1 { font-size: 18px; margin-bottom: 4px; }
@@ -257,7 +279,7 @@ export default function LancamentosPage() {
         .footer { margin-top: 16px; font-size: 10px; color: #94a3b8; }
       </style></head><body>
       <h1>Extrato de Lancamentos</h1>
-      <p class="sub">${mesNome} &bull; Gerado em ${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+      <p class="sub">Periodo: ${periodoNome} &bull; Gerado em ${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
       ${escopo ? `<p class="escopo">${escopo}</p>` : ''}
       <div class="resumo">
         <div class="ini">Saldo inicial: ${formatCurrency(saldoInicial)}</div>
@@ -281,8 +303,8 @@ export default function LancamentosPage() {
   }
 
   const matchEscopo = (l: { centro_custo_id?: string | null; categoria_id?: string | null; conta_bancaria_id?: string | null }) =>
-    (!filtroCentro || l.centro_custo_id === filtroCentro) &&
-    (!filtroCategoria || l.categoria_id === filtroCategoria) &&
+    (filtroCentros.size === 0 || (!!l.centro_custo_id && filtroCentros.has(l.centro_custo_id))) &&
+    (filtroCategorias.size === 0 || (!!l.categoria_id && filtroCategorias.has(l.categoria_id))) &&
     (!filtroConta || l.conta_bancaria_id === filtroConta)
 
   const filtrados = lancamentos.filter(l => {
@@ -298,7 +320,7 @@ export default function LancamentosPage() {
   // Saldo inicial do mes = saldo inicial das contas (so quando nao ha filtro por
   // centro/categoria, pois saldo_inicial e a nivel de conta) + movimentacoes
   // anteriores ao mes que batem com o escopo filtrado.
-  const saldoInicialContas = (!filtroCentro && !filtroCategoria)
+  const saldoInicialContas = (filtroCentros.size === 0 && filtroCategorias.size === 0)
     ? contas
         .filter(c => !filtroConta || c.id === filtroConta)
         .reduce((s, c) => s + Number(c.saldo_inicial), 0)
@@ -381,13 +403,32 @@ export default function LancamentosPage() {
       {/* Filtros */}
       <Card>
         <CardContent className="py-3 md:py-4 space-y-2.5">
+          {/* Periodo (De/Ate) + atalhos */}
           <div className="flex gap-2 flex-wrap items-center">
+            <span className="text-xs text-slate-400 font-medium">Periodo:</span>
             <input
-              type="month"
+              type="date"
               className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-              value={mesFiltro}
-              onChange={e => setMesFiltro(e.target.value)}
+              value={dataIni}
+              onChange={e => setDataIni(e.target.value)}
             />
+            <span className="text-slate-400 text-xs">ate</span>
+            <input
+              type="date"
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+              value={dataFim}
+              onChange={e => setDataFim(e.target.value)}
+            />
+            <div className="flex gap-1 flex-wrap">
+              {presets.map(p => (
+                <button key={p.label} onClick={p.on}
+                  className="px-2.5 py-2 rounded-xl text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all">
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex gap-2 flex-wrap items-center">
             <div className="flex-1 min-w-36 relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
@@ -423,25 +464,77 @@ export default function LancamentosPage() {
               <option value="">Todas as contas</option>
               {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
             </select>
-            <select
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 max-w-[48%] sm:max-w-none"
-              value={filtroCentro}
-              onChange={e => setFiltroCentro(e.target.value)}
-            >
-              <option value="">Todos os centros</option>
-              {centros.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-            </select>
-            <select
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 max-w-[48%] sm:max-w-none"
-              value={filtroCategoria}
-              onChange={e => setFiltroCategoria(e.target.value)}
-            >
-              <option value="">Todas as categorias</option>
-              {categorias.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-            </select>
-            {(filtroConta || filtroCentro || filtroCategoria) && (
+            {/* Centros de custo (multi) */}
+            <div className="relative">
               <button
-                onClick={() => { setFiltroConta(''); setFiltroCentro(''); setFiltroCategoria('') }}
+                onClick={() => setCentroMenuOpen(o => !o)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm transition-all ${filtroCentros.size > 0 ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'}`}
+              >
+                {filtroCentros.size > 0 ? `${filtroCentros.size} centro(s)` : 'Todos os centros'}
+                <Columns3 size={13} className="opacity-60" />
+              </button>
+              {centroMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setCentroMenuOpen(false)} />
+                  <div className="absolute left-0 mt-1 z-20 bg-white border border-slate-200 rounded-xl shadow-lg p-1.5 w-56 max-h-72 overflow-y-auto">
+                    <div className="flex items-center justify-between px-2 py-1">
+                      <span className="text-[10px] font-semibold text-slate-400 uppercase">Centros de custo</span>
+                      {filtroCentros.size > 0 && <button onClick={() => setFiltroCentros(new Set())} className="text-[11px] text-indigo-500 hover:underline">Limpar</button>}
+                    </div>
+                    {centros.map(c => {
+                      const on = filtroCentros.has(c.id)
+                      return (
+                        <button key={c.id} onClick={() => toggleSetItem(setFiltroCentros, c.id)}
+                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors text-left">
+                          <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on ? 'bg-indigo-600 border-indigo-600' : 'border-slate-300'}`}>
+                            {on && <Check size={11} className="text-white" />}
+                          </span>
+                          <span className="truncate">{c.nome}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Categorias (multi) */}
+            <div className="relative">
+              <button
+                onClick={() => setCategoriaMenuOpen(o => !o)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm transition-all ${filtroCategorias.size > 0 ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'}`}
+              >
+                {filtroCategorias.size > 0 ? `${filtroCategorias.size} categoria(s)` : 'Todas as categorias'}
+                <Columns3 size={13} className="opacity-60" />
+              </button>
+              {categoriaMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setCategoriaMenuOpen(false)} />
+                  <div className="absolute left-0 mt-1 z-20 bg-white border border-slate-200 rounded-xl shadow-lg p-1.5 w-56 max-h-72 overflow-y-auto">
+                    <div className="flex items-center justify-between px-2 py-1">
+                      <span className="text-[10px] font-semibold text-slate-400 uppercase">Categorias</span>
+                      {filtroCategorias.size > 0 && <button onClick={() => setFiltroCategorias(new Set())} className="text-[11px] text-indigo-500 hover:underline">Limpar</button>}
+                    </div>
+                    {categorias.map(c => {
+                      const on = filtroCategorias.has(c.id)
+                      return (
+                        <button key={c.id} onClick={() => toggleSetItem(setFiltroCategorias, c.id)}
+                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors text-left">
+                          <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on ? 'bg-indigo-600 border-indigo-600' : 'border-slate-300'}`}>
+                            {on && <Check size={11} className="text-white" />}
+                          </span>
+                          <span className="truncate">{c.nome}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {(filtroConta || filtroCentros.size > 0 || filtroCategorias.size > 0) && (
+              <button
+                onClick={() => { setFiltroConta(''); setFiltroCentros(new Set()); setFiltroCategorias(new Set()) }}
                 className="px-2.5 py-2 rounded-xl text-xs font-medium text-slate-500 hover:bg-slate-100 transition-all"
               >
                 Limpar
@@ -515,7 +608,7 @@ export default function LancamentosPage() {
                 <tr>
                   <td colSpan={cols.size + 1} className="text-center py-12">
                     <ArrowUpDown className="w-8 h-8 text-slate-200 mx-auto mb-3" />
-                    <p className="text-slate-400 font-medium">Nenhum lancamento em {mesFiltro}</p>
+                    <p className="text-slate-400 font-medium">Nenhum lancamento no periodo</p>
                     <p className="text-slate-400 text-xs mt-1">Use os botoes Entrada ou Saida para registrar</p>
                   </td>
                 </tr>
@@ -525,7 +618,7 @@ export default function LancamentosPage() {
                     <td key={c.key} className={`px-4 py-3 ${c.align === 'right' ? 'text-right' : ''}`}>{tableCell(l, c.key, saldoAcum)}</td>
                   ))}
                   <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex items-center justify-end gap-1">
                       <button
                         onClick={() => abrirEditar(l)}
                         className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-400 hover:text-indigo-600 transition-colors"

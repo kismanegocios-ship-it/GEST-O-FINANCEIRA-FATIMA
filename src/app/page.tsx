@@ -11,7 +11,7 @@ import {
 import Link from 'next/link'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend
+  PieChart, Pie, Cell
 } from 'recharts'
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -208,19 +208,41 @@ export default function Dashboard() {
               <div className="flex items-center justify-center h-48 text-slate-400 text-sm">
                 Sem dados este mes
               </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={240}>
-                <PieChart>
-                  <Pie cx="50%" cy="45%" innerRadius={50} outerRadius={80} dataKey="valor" nameKey="nome" data={graficoCategorias}>
-                    {graficoCategorias.map((_, i) => (
-                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
+            ) : (() => {
+              // Top 6 categorias + "Outros" agregado — evita legenda gigante
+              const ordenadas = [...graficoCategorias].sort((a, b) => b.valor - a.valor)
+              const TOP = 6
+              const principais = ordenadas.slice(0, TOP)
+              const restoValor = ordenadas.slice(TOP).reduce((s, c) => s + c.valor, 0)
+              const dados = restoValor > 0
+                ? [...principais, { nome: `Outros (${ordenadas.length - TOP})`, valor: restoValor }]
+                : principais
+              const totalCat = dados.reduce((s, c) => s + c.valor, 0)
+              return (
+                <div className="flex flex-col sm:flex-row items-center gap-4">
+                  <ResponsiveContainer width="100%" height={200} className="sm:!w-[45%]">
+                    <PieChart>
+                      <Pie cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="valor" nameKey="nome" data={dados}>
+                        {dados.map((_, i) => (
+                          <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(v: any) => formatCurrency(Number(v))} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="w-full sm:flex-1 space-y-1.5">
+                    {dados.map((c, i) => (
+                      <div key={c.nome} className="flex items-center gap-2 text-sm">
+                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
+                        <span className="text-slate-600 truncate flex-1">{c.nome}</span>
+                        <span className="text-slate-400 text-xs flex-shrink-0">{totalCat > 0 ? ((c.valor / totalCat) * 100).toFixed(0) : 0}%</span>
+                        <span className="font-semibold text-slate-800 text-xs flex-shrink-0 tabular-nums">{formatCurrency(c.valor)}</span>
+                      </div>
                     ))}
-                  </Pie>
-                  <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v: any) => formatCurrency(Number(v))} />
-                </PieChart>
-              </ResponsiveContainer>
-            )}
+                  </div>
+                </div>
+              )
+            })()}
           </CardContent>
         </Card>
       </div>
