@@ -15,7 +15,7 @@ import { toast } from 'sonner'
 import {
   Plus, Search, Calendar, CheckCircle, XCircle, Trash2,
   Pencil, Filter, RefreshCw, DollarSign, ChevronRight,
-  Paperclip, Eye, X, Loader2, Copy, RotateCcw
+  Paperclip, Eye, X, Loader2, Copy, RotateCcw, FileDown
 } from 'lucide-react'
 import type { Despesa, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
 import { format, addMonths, addDays, startOfMonth, endOfMonth } from 'date-fns'
@@ -486,6 +486,84 @@ export default function DespesasPage() {
     load()
   }
 
+  const escHtml = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
+
+  // PDF das contas exibidas (respeita mes, status e busca)
+  const exportarPDF = () => {
+    const lista = [...filtradas].sort((a, b) => (a.data_vencimento < b.data_vencimento ? -1 : 1))
+    if (lista.length === 0) { toast.error('Nenhuma conta para exportar com os filtros atuais'); return }
+
+    const statusPdf: Record<string, string> = { pendente: '#ca8a04', vencido: '#dc2626', pago: '#16a34a', cancelado: '#64748b' }
+    const escopo = [
+      mesFiltro && `Vencimento: ${format(new Date(Number(mesFiltro.slice(0, 4)), Number(mesFiltro.slice(5, 7)) - 1, 1), 'MMM/yyyy')}`,
+      filtroStatus !== 'todos' && `Status: ${getStatusLabel(filtroStatus)}`,
+      busca && `Busca: "${busca}"`,
+    ].filter(Boolean).map(t => escHtml(t as string)).join(' &nbsp;|&nbsp; ') || 'Todas as contas'
+
+    const totalGeral = lista.reduce((s, d) => s + Number(d.valor), 0)
+    const porStatus = {
+      pendente: lista.filter(d => d.status === 'pendente').reduce((s, d) => s + Number(d.valor), 0),
+      vencido: lista.filter(d => d.status === 'vencido').reduce((s, d) => s + Number(d.valor), 0),
+      pago: lista.filter(d => d.status === 'pago').reduce((s, d) => s + Number(d.valor), 0),
+    }
+
+    const linhas = lista.map(d => `
+      <tr>
+        <td>${escHtml(d.descricao)}${d.solicitante ? `<br><span style="color:#94a3b8;font-size:9px">Solicitado por: ${escHtml(d.solicitante)}</span>` : ''}</td>
+        <td>${formatDate(d.data_vencimento)}</td>
+        <td>${escHtml((d as any).centros_custo?.nome ?? '—')}</td>
+        <td>${escHtml((d as any).categorias?.nome ?? '—')}</td>
+        <td style="color:${statusPdf[d.status] ?? '#334155'};font-weight:600">${getStatusLabel(d.status)}</td>
+        <td style="text-align:right;font-weight:600">${formatCurrency(Number(d.valor))}</td>
+      </tr>`).join('')
+
+    const html = `
+      <!DOCTYPE html><html lang="pt-BR"><head>
+      <meta charset="UTF-8"><title>Contas a Pagar</title>
+      <style>
+        body { font-family: Arial, sans-serif; font-size: 11px; color: #1e293b; margin: 24px; }
+        h1 { font-size: 18px; margin-bottom: 4px; }
+        .sub { color: #64748b; font-size: 11px; margin-bottom: 4px; }
+        .escopo { color: #475569; font-size: 10px; margin-bottom: 14px; }
+        .resumo { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+        .resumo div { padding: 8px 16px; border-radius: 6px; }
+        .r1 { background: #fefce8; color: #ca8a04; font-weight: 600; }
+        .r2 { background: #fef2f2; color: #dc2626; font-weight: 600; }
+        .r3 { background: #f0fdf4; color: #16a34a; font-weight: 600; }
+        .r4 { background: #eef2ff; color: #4f46e5; font-weight: 700; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #f8fafc; text-align: left; padding: 6px 8px; font-size: 10px;
+             text-transform: uppercase; letter-spacing: .05em; color: #64748b; border-bottom: 2px solid #e2e8f0; }
+        td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+        .footer { margin-top: 16px; font-size: 10px; color: #94a3b8; }
+      </style></head><body>
+      <h1>Contas a Pagar</h1>
+      <p class="sub">Gerado em ${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+      <p class="escopo">${escopo}</p>
+      <div class="resumo">
+        <div class="r1">A pagar: ${formatCurrency(porStatus.pendente)}</div>
+        <div class="r2">Vencidas: ${formatCurrency(porStatus.vencido)}</div>
+        <div class="r3">Pagas: ${formatCurrency(porStatus.pago)}</div>
+        <div class="r4">Total: ${formatCurrency(totalGeral)}</div>
+      </div>
+      <table>
+        <thead><tr>
+          <th>Descricao</th><th>Vencimento</th><th>Centro</th><th>Categoria</th><th>Status</th>
+          <th style="text-align:right">Valor</th>
+        </tr></thead>
+        <tbody>${linhas}</tbody>
+      </table>
+      <p class="footer">Total: ${lista.length} conta(s)</p>
+      </body></html>`
+
+    const win = window.open('', '_blank')
+    if (!win) { toast.error('Permita popups para exportar PDF'); return }
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+    setTimeout(() => { win.print() }, 400)
+  }
+
   const filtradas = despesas.filter(d => {
     const mb = d.descricao.toLowerCase().includes(busca.toLowerCase())
     const ms = filtroStatus === 'todos' || d.status === filtroStatus
@@ -522,9 +600,14 @@ export default function DespesasPage() {
           <h1 className="text-xl md:text-2xl font-bold text-slate-800">Contas a Pagar</h1>
           <p className="text-xs md:text-sm text-slate-500 mt-0.5">Cadastro e controle das contas a pagar</p>
         </div>
-        <Button onClick={abrirNovo} size="sm">
-          <Plus size={15} /> <span className="hidden sm:inline">Nova</span> Conta
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={exportarPDF} size="sm" title="Imprimir/PDF das contas exibidas">
+            <FileDown size={15} /> <span className="hidden sm:inline">PDF</span>
+          </Button>
+          <Button onClick={abrirNovo} size="sm">
+            <Plus size={15} /> <span className="hidden sm:inline">Nova</span> Conta
+          </Button>
+        </div>
       </div>
 
       {/* Cards resumo */}
