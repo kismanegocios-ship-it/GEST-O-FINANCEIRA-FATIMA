@@ -77,6 +77,7 @@ export default function LancamentosPage() {
   // Extrato: do inicio do mes para o fim (crescente), como no extrato bancario
   const [ordem, setOrdem] = useState<'asc' | 'desc'>('asc')
   const [colMenuOpen, setColMenuOpen] = useState(false)
+  const [selecionados, setSelecionados] = useState<Set<string>>(new Set())
   const [priorLancs, setPriorLancs] = useState<Pick<Lancamento, 'valor' | 'tipo' | 'conta_bancaria_id' | 'centro_custo_id' | 'categoria_id'>[]>([])
 
   const load = useCallback(async () => {
@@ -177,10 +178,41 @@ export default function LancamentosPage() {
     load()
   }
 
-  const excluir = async (id: string) => {
-    if (!confirm('Excluir este lancamento?')) return
-    await supabase.from('lancamentos').delete().eq('id', id)
+  const excluir = async (l: Lancamento) => {
+    const sinal = l.tipo === 'entrada' ? '+' : '-'
+    if (!confirm(`Excluir este lancamento?\n\n${l.descricao}\n${sinal}${formatCurrency(Number(l.valor))} · ${formatDate(l.data)}`)) return
+    const { error } = await supabase.from('lancamentos').delete().eq('id', l.id)
+    if (error) { toast.error('Erro ao excluir: ' + error.message); return }
+    setSelecionados(prev => { const n = new Set(prev); n.delete(l.id); return n })
     toast.success('Lancamento excluido')
+    load()
+  }
+
+  const toggleSelecionado = (id: string) => {
+    setSelecionados(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id); else n.add(id)
+      return n
+    })
+  }
+
+  const toggleTodosVisiveis = () => {
+    const ids = filtrados.map(l => l.id)
+    const todosMarcados = ids.length > 0 && ids.every(id => selecionados.has(id))
+    setSelecionados(todosMarcados ? new Set() : new Set(ids))
+  }
+
+  const excluirSelecionados = async () => {
+    if (selecionados.size === 0) return
+    const ids = Array.from(selecionados)
+    const itens = lancamentos.filter(l => selecionados.has(l.id))
+    const previa = itens.slice(0, 8).map(l => `• ${l.descricao} (${l.tipo === 'entrada' ? '+' : '-'}${formatCurrency(Number(l.valor))})`).join('\n')
+    const extra = itens.length > 8 ? `\n... e mais ${itens.length - 8}` : ''
+    if (!confirm(`Excluir ${ids.length} lancamento(s)?\n\n${previa}${extra}\n\nEsta acao nao pode ser desfeita.`)) return
+    const { error } = await supabase.from('lancamentos').delete().in('id', ids)
+    if (error) { toast.error('Erro ao excluir: ' + error.message); return }
+    toast.success(`${ids.length} lancamento(s) excluido(s)`)
+    setSelecionados(new Set())
     load()
   }
 
@@ -588,6 +620,27 @@ export default function LancamentosPage() {
         </CardContent>
       </Card>
 
+      {/* Barra de acao em massa */}
+      {selecionados.size > 0 && (
+        <div className="flex items-center justify-between gap-3 bg-red-50 border border-red-100 rounded-xl px-4 py-2.5">
+          <span className="text-sm font-medium text-red-700">{selecionados.size} lancamento(s) selecionado(s)</span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setSelecionados(new Set())}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-500 hover:bg-slate-100 transition-colors"
+            >
+              Limpar selecao
+            </button>
+            <button
+              onClick={excluirSelecionados}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors"
+            >
+              <Trash2 size={13} /> Excluir selecionados
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Lista */}
       <Card>
         {/* Desktop */}
@@ -595,6 +648,15 @@ export default function LancamentosPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100">
+                <th className="px-4 py-4 w-10">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 accent-indigo-600 cursor-pointer align-middle"
+                    checked={filtrados.length > 0 && filtrados.every(l => selecionados.has(l.id))}
+                    onChange={toggleTodosVisiveis}
+                    title="Selecionar todos"
+                  />
+                </th>
                 {COLS.filter(c => cols.has(c.key)).map(c => (
                   <th key={c.key} className={`px-4 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wide ${c.align === 'right' ? 'text-right' : 'text-left'}`}>{c.label}</th>
                 ))}
@@ -603,17 +665,25 @@ export default function LancamentosPage() {
             </thead>
             <tbody className="divide-y divide-slate-50">
               {loading ? (
-                <tr><td colSpan={cols.size + 1} className="text-center py-12 text-slate-400">Carregando...</td></tr>
+                <tr><td colSpan={cols.size + 2} className="text-center py-12 text-slate-400">Carregando...</td></tr>
               ) : filtrados.length === 0 ? (
                 <tr>
-                  <td colSpan={cols.size + 1} className="text-center py-12">
+                  <td colSpan={cols.size + 2} className="text-center py-12">
                     <ArrowUpDown className="w-8 h-8 text-slate-200 mx-auto mb-3" />
                     <p className="text-slate-400 font-medium">Nenhum lancamento no periodo</p>
                     <p className="text-slate-400 text-xs mt-1">Use os botoes Entrada ou Saida para registrar</p>
                   </td>
                 </tr>
               ) : linhas.map(({ l, saldoAcum }) => (
-                <tr key={l.id} className="hover:bg-slate-50/80 transition-colors group">
+                <tr key={l.id} className={`hover:bg-slate-50/80 transition-colors group ${selecionados.has(l.id) ? 'bg-indigo-50/40' : ''}`}>
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 accent-indigo-600 cursor-pointer align-middle"
+                      checked={selecionados.has(l.id)}
+                      onChange={() => toggleSelecionado(l.id)}
+                    />
+                  </td>
                   {COLS.filter(c => cols.has(c.key)).map(c => (
                     <td key={c.key} className={`px-4 py-3 ${c.align === 'right' ? 'text-right' : ''}`}>{tableCell(l, c.key, saldoAcum)}</td>
                   ))}
@@ -627,7 +697,7 @@ export default function LancamentosPage() {
                         <Pencil size={14} />
                       </button>
                       <button
-                        onClick={() => excluir(l.id)}
+                        onClick={() => excluir(l)}
                         className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors"
                         title="Excluir"
                       >
@@ -648,13 +718,21 @@ export default function LancamentosPage() {
           ) : filtrados.length === 0 ? (
             <MobileCard><p className="text-center text-slate-400 py-8">Nenhum lancamento encontrado</p></MobileCard>
           ) : linhas.map(({ l, saldoAcum }) => (
-            <MobileCard key={l.id}>
+            <MobileCard key={l.id} className={selecionados.has(l.id) ? 'bg-indigo-50/40' : ''}>
               <div className="flex items-start justify-between gap-2 mb-1.5">
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-slate-800 text-sm truncate">{l.descricao}</p>
-                  {(l as any).centros_custo && (
-                    <p className="text-xs text-slate-400">{(l as any).centros_custo.nome}</p>
-                  )}
+                <div className="flex items-start gap-2 flex-1 min-w-0">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 accent-indigo-600 cursor-pointer mt-0.5 flex-shrink-0"
+                    checked={selecionados.has(l.id)}
+                    onChange={() => toggleSelecionado(l.id)}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-slate-800 text-sm truncate">{l.descricao}</p>
+                    {(l as any).centros_custo && (
+                      <p className="text-xs text-slate-400">{(l as any).centros_custo.nome}</p>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <Badge variant={l.tipo === 'entrada' ? 'success' : 'danger'}>
@@ -663,7 +741,7 @@ export default function LancamentosPage() {
                   <button onClick={() => abrirEditar(l)} className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-400">
                     <Pencil size={13} />
                   </button>
-                  <button onClick={() => excluir(l.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400">
+                  <button onClick={() => excluir(l)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400">
                     <Trash2 size={13} />
                   </button>
                 </div>
