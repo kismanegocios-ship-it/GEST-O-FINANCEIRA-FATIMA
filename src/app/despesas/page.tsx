@@ -18,10 +18,10 @@ import {
   Paperclip, Eye, X, Loader2, Copy, RotateCcw, FileDown
 } from 'lucide-react'
 import type { Despesa, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
-import { format, addMonths, addDays, startOfMonth, endOfMonth } from 'date-fns'
+import { format, addMonths, addDays, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns'
 
 // Quantos meses a frente as contas recorrentes sao provisionadas
-const HORIZONTE_MESES = 3
+const HORIZONTE_MESES = 12
 
 // Proxima data de uma serie recorrente conforme a frequencia
 function proximaDataRecorrencia(dateStr: string, freq: string): Date {
@@ -82,7 +82,9 @@ export default function DespesasPage() {
   const [saving, setSaving] = useState(false)
   const [busca, setBusca] = useState('')
   const [filtroStatus, setFiltroStatus] = useState('todos')
-  const [mesFiltro, setMesFiltro] = useState('') // '' = todos os meses (por vencimento)
+  // Periodo por vencimento ('' = sem limite = todos)
+  const [perIni, setPerIni] = useState('')
+  const [perFim, setPerFim] = useState('')
   const [modalPagar, setModalPagar] = useState<Despesa | null>(null)
   const [dataPagamento, setDataPagamento] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [pagContaId, setPagContaId] = useState('')
@@ -302,6 +304,18 @@ export default function DespesasPage() {
 
   useEffect(() => { load() }, [load])
 
+  const setPeriodo = (ini: Date, fim: Date) => {
+    setPerIni(format(ini, 'yyyy-MM-dd'))
+    setPerFim(format(fim, 'yyyy-MM-dd'))
+  }
+  const hojeRef = new Date()
+  const presetsPeriodo = [
+    { label: 'Este mes', on: () => setPeriodo(startOfMonth(hojeRef), endOfMonth(hojeRef)) },
+    { label: 'Mes passado', on: () => { const m = subMonths(hojeRef, 1); setPeriodo(startOfMonth(m), endOfMonth(m)) } },
+    { label: 'Proximos 3 meses', on: () => setPeriodo(startOfMonth(hojeRef), endOfMonth(addMonths(hojeRef, 2))) },
+    { label: 'Este ano', on: () => setPeriodo(startOfYear(hojeRef), endOfYear(hojeRef)) },
+  ]
+
   const abrirNovo = () => { setEditando(null); setForm(emptyForm); setModalAnexoFile(null); setParcelasCustom(null); setModalOpen(true) }
   const abrirEditar = (d: Despesa) => {
     setEditando(d)
@@ -495,7 +509,7 @@ export default function DespesasPage() {
 
     const statusPdf: Record<string, string> = { pendente: '#ca8a04', vencido: '#dc2626', pago: '#16a34a', cancelado: '#64748b' }
     const escopo = [
-      mesFiltro && `Vencimento: ${format(new Date(Number(mesFiltro.slice(0, 4)), Number(mesFiltro.slice(5, 7)) - 1, 1), 'MMM/yyyy')}`,
+      (perIni || perFim) && `Vencimento: ${perIni ? formatDate(perIni) : '...'} a ${perFim ? formatDate(perFim) : '...'}`,
       filtroStatus !== 'todos' && `Status: ${getStatusLabel(filtroStatus)}`,
       busca && `Busca: "${busca}"`,
     ].filter(Boolean).map(t => escHtml(t as string)).join(' &nbsp;|&nbsp; ') || 'Todas as contas'
@@ -567,7 +581,8 @@ export default function DespesasPage() {
   const filtradas = despesas.filter(d => {
     const mb = d.descricao.toLowerCase().includes(busca.toLowerCase())
     const ms = filtroStatus === 'todos' || d.status === filtroStatus
-    const mm = mesFiltro === '' || (d.data_vencimento ?? '').slice(0, 7) === mesFiltro
+    const dv = d.data_vencimento ?? ''
+    const mm = (perIni === '' || dv >= perIni) && (perFim === '' || dv <= perFim)
     return mb && ms && mm
   })
 
@@ -633,11 +648,11 @@ export default function DespesasPage() {
       </div>
 
       {/* Total do que esta filtrado na tela */}
-      {(filtroStatus !== 'todos' || busca || mesFiltro) && (
+      {(filtroStatus !== 'todos' || busca || perIni || perFim) && (
         <div className="flex items-center justify-between gap-3 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-2.5">
           <span className="text-xs text-indigo-700 font-medium">
             {filtradas.length} conta(s) exibida(s)
-            {mesFiltro && ` · venc. ${format(new Date(Number(mesFiltro.slice(0, 4)), Number(mesFiltro.slice(5, 7)) - 1, 1), 'MMM/yyyy')}`}
+            {(perIni || perFim) && ` · venc. ${perIni ? formatDate(perIni) : '...'} a ${perFim ? formatDate(perFim) : '...'}`}
             {filtroStatus !== 'todos' && ` · ${getStatusLabel(filtroStatus)}`}
             {busca && ` · busca "${busca}"`}
           </span>
@@ -664,27 +679,36 @@ export default function DespesasPage() {
               ))}
             </div>
           </div>
-          {/* Filtro por mes de vencimento */}
+          {/* Filtro por periodo de vencimento (De/Ate) */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-slate-400 font-medium">Vencimento:</span>
             <input
-              type="month"
+              type="date"
               className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-              value={mesFiltro}
-              onChange={e => setMesFiltro(e.target.value)}
+              value={perIni}
+              onChange={e => setPerIni(e.target.value)}
             />
-            <button
-              onClick={() => setMesFiltro('')}
-              className={`px-3 py-2 rounded-xl text-xs font-medium transition-all ${mesFiltro === '' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-            >
-              Todos os meses
-            </button>
-            <button
-              onClick={() => setMesFiltro(format(new Date(), 'yyyy-MM'))}
-              className="px-3 py-2 rounded-xl text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all"
-            >
-              Este mes
-            </button>
+            <span className="text-slate-400 text-xs">ate</span>
+            <input
+              type="date"
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+              value={perFim}
+              onChange={e => setPerFim(e.target.value)}
+            />
+            <div className="flex gap-1 flex-wrap">
+              {presetsPeriodo.map(p => (
+                <button key={p.label} onClick={p.on}
+                  className="px-2.5 py-2 rounded-xl text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all">
+                  {p.label}
+                </button>
+              ))}
+              <button
+                onClick={() => { setPerIni(''); setPerFim('') }}
+                className={`px-2.5 py-2 rounded-xl text-xs font-medium transition-all ${!perIni && !perFim ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                Todos
+              </button>
+            </div>
           </div>
         </CardContent>
       </Card>

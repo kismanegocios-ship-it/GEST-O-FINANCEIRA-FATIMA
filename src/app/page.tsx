@@ -10,8 +10,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts'
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -209,37 +208,36 @@ export default function Dashboard() {
                 Sem dados este mes
               </div>
             ) : (() => {
-              // Top 6 categorias + "Outros" agregado — evita legenda gigante
+              // Ranking em barras horizontais: Top 8 + "Outros" agregado
               const ordenadas = [...graficoCategorias].sort((a, b) => b.valor - a.valor)
-              const TOP = 6
+              const TOP = 8
               const principais = ordenadas.slice(0, TOP)
               const restoValor = ordenadas.slice(TOP).reduce((s, c) => s + c.valor, 0)
               const dados = restoValor > 0
                 ? [...principais, { nome: `Outros (${ordenadas.length - TOP})`, valor: restoValor }]
                 : principais
               const totalCat = dados.reduce((s, c) => s + c.valor, 0)
+              const maxVal = Math.max(...dados.map(c => c.valor), 1)
               return (
-                <div className="flex flex-col sm:flex-row items-center gap-4">
-                  <ResponsiveContainer width="100%" height={200} className="sm:!w-[45%]">
-                    <PieChart>
-                      <Pie cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="valor" nameKey="nome" data={dados}>
-                        {dados.map((_, i) => (
-                          <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(v: any) => formatCurrency(Number(v))} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div className="w-full sm:flex-1 space-y-1.5">
-                    {dados.map((c, i) => (
-                      <div key={c.nome} className="flex items-center gap-2 text-sm">
-                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
-                        <span className="text-slate-600 truncate flex-1">{c.nome}</span>
-                        <span className="text-slate-400 text-xs flex-shrink-0">{totalCat > 0 ? ((c.valor / totalCat) * 100).toFixed(0) : 0}%</span>
-                        <span className="font-semibold text-slate-800 text-xs flex-shrink-0 tabular-nums">{formatCurrency(c.valor)}</span>
+                <div className="space-y-2.5">
+                  {dados.map((c, i) => {
+                    const pctTotal = totalCat > 0 ? (c.valor / totalCat) * 100 : 0
+                    const pctBarra = (c.valor / maxVal) * 100
+                    return (
+                      <div key={c.nome}>
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className="text-sm text-slate-600 truncate">{c.nome}</span>
+                          <span className="text-sm font-semibold text-slate-800 flex-shrink-0 tabular-nums">
+                            {formatCurrency(c.valor)}
+                            <span className="text-xs text-slate-400 font-normal ml-1.5">{pctTotal.toFixed(0)}%</span>
+                          </span>
+                        </div>
+                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-2 rounded-full transition-all" style={{ width: `${pctBarra}%`, background: COLORS[i % COLORS.length] }} />
+                        </div>
                       </div>
-                    ))}
-                  </div>
+                    )
+                  })}
                 </div>
               )
             })()}
