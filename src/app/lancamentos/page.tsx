@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import type { Lancamento, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
 import { format, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns'
+import { fetchAllRows } from '@/lib/fetch-all'
 
 type ColKey = 'data' | 'descricao' | 'tipo' | 'valor' | 'saldo' | 'forma' | 'conta' | 'categoria' | 'centro' | 'conciliado'
 const COLS: { key: ColKey; label: string; align: 'left' | 'right' }[] = [
@@ -84,22 +85,23 @@ export default function LancamentosPage() {
     setLoading(true)
     const ini = dataIni
     const fim = dataFim
+    // Paginado: garante o saldo correto mesmo com +1000 lancamentos no historico
     const [l, cc, cat, cb, prior] = await Promise.all([
-      supabase.from('lancamentos')
+      fetchAllRows<Lancamento>(() => supabase.from('lancamentos')
         .select('*, centros_custo(*), categorias(*), contas_bancarias(*)')
-        .gte('data', ini).lte('data', fim).order('data', { ascending: false }),
+        .gte('data', ini).lte('data', fim).order('data', { ascending: false })),
       supabase.from('centros_custo').select('*').eq('ativo', true).order('nome'),
       supabase.from('categorias').select('*').order('tipo').order('nome'),
       supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome'),
-      supabase.from('lancamentos')
+      fetchAllRows<typeof priorLancs[number]>(() => supabase.from('lancamentos')
         .select('valor, tipo, conta_bancaria_id, centro_custo_id, categoria_id')
-        .lt('data', ini),
+        .lt('data', ini)),
     ])
-    setLancamentos((l.data ?? []) as Lancamento[])
+    setLancamentos(l)
     setCentros(cc.data ?? [])
     setCategorias(cat.data ?? [])
     setContas((cb.data ?? []) as ContaBancaria[])
-    setPriorLancs((prior.data ?? []) as typeof priorLancs)
+    setPriorLancs(prior)
     setLoading(false)
   }, [dataIni, dataFim])
 

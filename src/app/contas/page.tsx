@@ -12,6 +12,7 @@ import { CurrencyInput } from '@/components/ui/currency-input'
 import { toast } from 'sonner'
 import { Plus, Pencil, Trash2, Building2, RefreshCw } from 'lucide-react'
 import type { ContaBancaria } from '@/lib/types'
+import { fetchAllRows } from '@/lib/fetch-all'
 
 interface FormData {
   nome: string
@@ -39,13 +40,15 @@ export default function ContasPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [contasRes, lancRes] = await Promise.all([
+    // Paginado: soma TODOS os lancamentos (evita truncar em 1000 e errar o saldo)
+    const [contasRes, lancs] = await Promise.all([
       supabase.from('contas_bancarias').select('*').order('nome'),
-      supabase.from('lancamentos').select('valor, tipo, conta_bancaria_id').not('conta_bancaria_id', 'is', null),
+      fetchAllRows<{ valor: number; tipo: string; conta_bancaria_id: string }>(() =>
+        supabase.from('lancamentos').select('valor, tipo, conta_bancaria_id').not('conta_bancaria_id', 'is', null)),
     ])
     setContas((contasRes.data ?? []) as ContaBancaria[])
     const somas: Record<string, number> = {}
-    for (const l of lancRes.data ?? []) {
+    for (const l of lancs) {
       const contaId = l.conta_bancaria_id as string
       const delta = l.tipo === 'entrada' ? Number(l.valor) : -Number(l.valor)
       somas[contaId] = (somas[contaId] ?? 0) + delta

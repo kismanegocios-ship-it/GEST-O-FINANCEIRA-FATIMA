@@ -6,11 +6,12 @@ import { formatCurrency } from '@/lib/utils'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend, AreaChart, Area
+  Cell, Legend, AreaChart, Area
 } from 'recharts'
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { Download } from 'lucide-react'
+import { fetchAllRows } from '@/lib/fetch-all'
 
 const COLORS = ['#6366f1', '#f472b6', '#22c55e', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#14b8a6']
 
@@ -51,8 +52,8 @@ export default function RelatoriosPage() {
       const m = subMonths(hoje, i)
       const ini = format(startOfMonth(m), 'yyyy-MM-dd')
       const fim = format(endOfMonth(m), 'yyyy-MM-dd')
-      const { data } = await supabase.from('lancamentos').select('tipo, valor').gte('data', ini).lte('data', fim)
-      const d = data ?? []
+      const d = await fetchAllRows<{ tipo: string; valor: number }>(() =>
+        supabase.from('lancamentos').select('tipo, valor').gte('data', ini).lte('data', fim))
       const entradas = d.filter((l: any) => l.tipo === 'entrada').reduce((s: number, l: any) => s + Number(l.valor), 0)
       const saidas = d.filter((l: any) => l.tipo === 'saida').reduce((s: number, l: any) => s + Number(l.valor), 0)
       mesesData.push({
@@ -71,15 +72,12 @@ export default function RelatoriosPage() {
     const ini = format(startOfMonth(mesDate), 'yyyy-MM-dd')
     const fim = format(endOfMonth(mesDate), 'yyyy-MM-dd')
 
-    const [lanc, desp] = await Promise.all([
-      supabase.from('lancamentos').select('tipo, valor, categorias(nome), centros_custo(nome)').gte('data', ini).lte('data', fim),
-      supabase.from('despesas').select('status, valor, categorias(nome), centros_custo(nome)').gte('data_vencimento', ini).lte('data_vencimento', fim),
+    const [lancamentos, despesas] = await Promise.all([
+      fetchAllRows<any>(() => supabase.from('lancamentos').select('tipo, valor, categorias(nome), centros_custo(nome)').gte('data', ini).lte('data', fim)),
+      fetchAllRows<any>(() => supabase.from('despesas').select('status, valor, categorias(nome), centros_custo(nome)').gte('data_vencimento', ini).lte('data_vencimento', fim)),
     ])
-
-    const lancamentos = lanc.data ?? []
     const entradas = lancamentos.filter((l: any) => l.tipo === 'entrada').reduce((s: number, l: any) => s + Number(l.valor), 0)
     const saidas = lancamentos.filter((l: any) => l.tipo === 'saida').reduce((s: number, l: any) => s + Number(l.valor), 0)
-    const despesas = desp.data ?? []
 
     setResumoMes({
       entradas,
@@ -350,17 +348,33 @@ export default function RelatoriosPage() {
           <CardContent>
             {centrosCusto.length === 0 ? (
               <p className="text-slate-400 text-sm text-center py-8">Sem dados</p>
-            ) : (
-              <ResponsiveContainer width="100%" height={200}>
-                <PieChart>
-                  <Pie data={centrosCusto} cx="50%" cy="50%" outerRadius={70} dataKey="valor" nameKey="nome">
-                    {centrosCusto.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                  </Pie>
-                  <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v: any) => formatCurrency(Number(v))} />
-                </PieChart>
-              </ResponsiveContainer>
-            )}
+            ) : (() => {
+              const ordenados = [...centrosCusto].sort((a, b) => b.valor - a.valor)
+              const TOP = 8
+              const principais = ordenados.slice(0, TOP)
+              const resto = ordenados.slice(TOP).reduce((s, c) => s + c.valor, 0)
+              const dados = resto > 0 ? [...principais, { nome: `Outros (${ordenados.length - TOP})`, valor: resto }] : principais
+              const total = dados.reduce((s, c) => s + c.valor, 0)
+              const maxVal = Math.max(...dados.map(c => c.valor), 1)
+              return (
+                <div className="space-y-2.5">
+                  {dados.map((c, i) => (
+                    <div key={c.nome}>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-sm text-slate-600 truncate">{c.nome}</span>
+                        <span className="text-sm font-semibold text-slate-800 flex-shrink-0 tabular-nums">
+                          {formatCurrency(c.valor)}
+                          <span className="text-xs text-slate-400 font-normal ml-1.5">{total > 0 ? ((c.valor / total) * 100).toFixed(0) : 0}%</span>
+                        </span>
+                      </div>
+                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-2 rounded-full" style={{ width: `${(c.valor / maxVal) * 100}%`, background: COLORS[i % COLORS.length] }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            })()}
           </CardContent>
         </Card>
       </div>

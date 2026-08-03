@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import type { Despesa, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
 import { format, addMonths, addDays, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns'
+import { fetchAllRows } from '@/lib/fetch-all'
 
 // Quantos meses a frente as contas recorrentes sao provisionadas
 const HORIZONTE_MESES = 12
@@ -224,10 +225,12 @@ export default function DespesasPage() {
       .from('despesas').select('*').eq('recorrente', true).neq('status', 'cancelado')
     if (error || !templates || templates.length === 0) return
 
-    // Mapa descricao -> conjunto de datas ja existentes (qualquer despesa)
-    const { data: todas } = await supabase.from('despesas').select('descricao, data_vencimento')
+    // Mapa descricao -> conjunto de datas ja existentes (qualquer despesa).
+    // Paginado: se truncasse em 1000, a dedup falharia e recriaria duplicatas.
+    const todas = await fetchAllRows<{ descricao: string; data_vencimento: string }>(() =>
+      supabase.from('despesas').select('descricao, data_vencimento'))
     const porDesc = new Map<string, Set<string>>()
-    for (const r of (todas ?? []) as { descricao: string; data_vencimento: string }[]) {
+    for (const r of todas) {
       const set = porDesc.get(r.descricao) ?? new Set<string>()
       set.add(r.data_vencimento)
       porDesc.set(r.descricao, set)
@@ -290,12 +293,12 @@ export default function DespesasPage() {
     await provisionarRecorrencias()
 
     const [d, cc, cat, cb] = await Promise.all([
-      supabase.from('despesas').select('*, centros_custo(*), categorias(*)').order('data_vencimento'),
+      fetchAllRows<Despesa>(() => supabase.from('despesas').select('*, centros_custo(*), categorias(*)').order('data_vencimento')),
       supabase.from('centros_custo').select('*').eq('ativo', true).order('nome'),
       supabase.from('categorias').select('*').eq('tipo', 'saida').order('nome'),
       supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome'),
     ])
-    setDespesas((d.data ?? []) as Despesa[])
+    setDespesas(d)
     setCentros(cc.data ?? [])
     setCategorias(cat.data ?? [])
     setContas((cb.data ?? []) as ContaBancaria[])
