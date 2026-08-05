@@ -386,7 +386,7 @@ export default function DespesasPage() {
       }))
       const { error } = await supabase.from('despesas').insert(registros)
       setSaving(false)
-      if (error) { toast.error('Erro ao criar parcelas'); return }
+      if (error) { console.error('Erro parcelas:', error); toast.error('Erro ao criar parcelas: ' + error.message); return }
       const soma = lista.reduce((s, p) => s + parseFloat(p.valor), 0)
       toast.success(`${total} parcelas criadas! Total ${formatCurrency(soma)}`)
       setModalOpen(false); setForm(emptyForm); setParcelasCustom(null); load()
@@ -404,14 +404,23 @@ export default function DespesasPage() {
       solicitante: form.solicitante || null,
       data_pagamento: statusFinal === 'pago' ? hoje : null,
     }
-    const { data: saved, error } = editando
-      ? await supabase.from('despesas').update(payload).eq('id', editando.id).select('id').single()
-      : await supabase.from('despesas').insert(payload).select('id').single()
-    if (error || !saved) { setSaving(false); toast.error('Erro ao salvar'); return }
-    const despesaId = (saved as { id: string }).id
+    // So precisamos do id de volta quando ha anexo pra enviar. No caso comum,
+    // insert/update simples (evita falha do .select().single() apos o insert).
+    let despesaId = editando?.id ?? ''
+    if (editando) {
+      const { error } = await supabase.from('despesas').update(payload).eq('id', editando.id)
+      if (error) { setSaving(false); console.error('Erro salvar despesa:', error); toast.error('Erro ao salvar: ' + error.message); return }
+    } else if (modalAnexoFile) {
+      const { data: saved, error } = await supabase.from('despesas').insert(payload).select('id').single()
+      if (error || !saved) { setSaving(false); console.error('Erro salvar despesa:', error); toast.error('Erro ao salvar: ' + (error?.message ?? 'sem retorno do banco')); return }
+      despesaId = (saved as { id: string }).id
+    } else {
+      const { error } = await supabase.from('despesas').insert(payload)
+      if (error) { setSaving(false); console.error('Erro salvar despesa:', error); toast.error('Erro ao salvar: ' + error.message); return }
+    }
 
     // ── Anexo escolhido no modal → envia pro Storage ──
-    if (modalAnexoFile) {
+    if (modalAnexoFile && despesaId) {
       await subirAnexoParaDespesa(despesaId, editando?.anexo_path, modalAnexoFile)
       setModalAnexoFile(null)
     }
