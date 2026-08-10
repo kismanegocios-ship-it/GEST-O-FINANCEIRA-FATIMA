@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase-browser'
+import { EmpresaSelector } from '@/components/layout/empresa-selector'
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -43,6 +44,9 @@ export function Sidebar() {
             <p className="font-bold text-slate-800 text-sm leading-tight">Sistema</p>
             <p className="font-bold text-indigo-600 text-sm leading-tight">Fatima</p>
           </div>
+        </div>
+        <div className="mt-3">
+          <EmpresaSelector />
         </div>
       </div>
 

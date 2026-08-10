@@ -10,6 +10,7 @@ import { Modal } from '@/components/ui/modal'
 import { toast } from 'sonner'
 import { Plus, Pencil, Trash2, Tag, TrendingUp, TrendingDown } from 'lucide-react'
 import type { Categoria } from '@/lib/types'
+import { useEmpresa } from '@/lib/empresa'
 
 const CORES = [
   '#6366f1', '#3b82f6', '#22c55e', '#f59e0b', '#ef4444',
@@ -32,13 +33,16 @@ export default function CategoriasPage() {
   const [form, setForm] = useState<FormData>(emptyForm)
   const [saving, setSaving] = useState(false)
   const [filtroTipo, setFiltroTipo] = useState<'todos' | 'entrada' | 'saida'>('todos')
+  const { empresaId } = useEmpresa()
 
   const load = useCallback(async () => {
     setLoading(true)
-    const { data } = await supabase.from('categorias').select('*').order('tipo').order('nome')
+    let q = supabase.from('categorias').select('*').order('tipo').order('nome')
+    if (empresaId) q = q.eq('empresa_id', empresaId)
+    const { data } = await q
     setCategorias((data ?? []) as Categoria[])
     setLoading(false)
-  }, [])
+  }, [empresaId])
 
   useEffect(() => { load() }, [load])
 
@@ -60,9 +64,9 @@ export default function CategoriasPage() {
     const payload = { nome: form.nome, tipo: form.tipo, cor: form.cor, icone: editando?.icone ?? 'tag' }
     const { error } = editando
       ? await supabase.from('categorias').update(payload as any).eq('id', editando.id)
-      : await supabase.from('categorias').insert(payload as any)
+      : await supabase.from('categorias').insert({ ...payload, ...(empresaId ? { empresa_id: empresaId } : {}) } as any)
     setSaving(false)
-    if (error) { toast.error('Erro ao salvar'); return }
+    if (error) { toast.error('Erro ao salvar: ' + error.message); return }
     toast.success(editando ? 'Categoria atualizada!' : 'Categoria criada!')
     setModalOpen(false)
     load()

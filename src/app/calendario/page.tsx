@@ -17,6 +17,7 @@ import {
   addMonths, subMonths, isToday, isBefore, parseISO, getDay, isThisMonth
 } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
+import { useEmpresa } from '@/lib/empresa'
 
 const STATUS_CONFIG = {
   pendente: { label: 'Pendente', color: 'bg-amber-500', light: 'bg-amber-50 border-amber-200 text-amber-700', dot: 'bg-amber-500' },
@@ -69,39 +70,41 @@ export default function CalendarioPage() {
   const [loading, setLoading] = useState(true)
   const [diaSelecionado, setDiaSelecionado] = useState<Date | null>(null)
   const [baseUrl, setBaseUrl] = useState('')
+  const { empresaId } = useEmpresa()
 
   useEffect(() => { setBaseUrl(window.location.origin) }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
+    const esc = <T,>(q: T): T => (empresaId ? (q as any).eq('empresa_id', empresaId) : q)
 
-    // Auto-vencimento: pendentes com data anterior a hoje → vencido
+    // Auto-vencimento: pendentes com data anterior a hoje → vencido (so da empresa atual)
     const hoje = format(new Date(), 'yyyy-MM-dd')
-    await supabase
+    await esc(supabase
       .from('despesas')
       .update({ status: 'vencido' })
       .eq('status', 'pendente')
-      .lt('data_vencimento', hoje)
+      .lt('data_vencimento', hoje))
 
     const ini = format(startOfMonth(mes), 'yyyy-MM-dd')
     const fim = format(endOfMonth(mes), 'yyyy-MM-dd')
     // Proximos vencimentos: atrasados + pendentes ate 3 meses a frente
     const horizonte = format(endOfMonth(addMonths(new Date(), 3)), 'yyyy-MM-dd')
     const [mesRes, proxRes] = await Promise.all([
-      supabase.from('despesas')
+      esc(supabase.from('despesas')
         .select('*, categorias(*), centros_custo(*)')
         .gte('data_vencimento', ini).lte('data_vencimento', fim)
-        .order('data_vencimento'),
-      supabase.from('despesas')
+        .order('data_vencimento')),
+      esc(supabase.from('despesas')
         .select('*, categorias(*), centros_custo(*)')
         .in('status', ['pendente', 'vencido'])
         .lte('data_vencimento', horizonte)
-        .order('data_vencimento'),
+        .order('data_vencimento')),
     ])
     setDespesas((mesRes.data ?? []) as Despesa[])
     setProximas((proxRes.data ?? []) as Despesa[])
     setLoading(false)
-  }, [mes])
+  }, [mes, empresaId])
 
   useEffect(() => { load() }, [load])
 

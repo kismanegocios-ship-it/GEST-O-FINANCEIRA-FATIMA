@@ -12,6 +12,7 @@ import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { Download } from 'lucide-react'
 import { fetchAllRows } from '@/lib/fetch-all'
+import { useEmpresa } from '@/lib/empresa'
 
 const COLORS = ['#6366f1', '#f472b6', '#22c55e', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#14b8a6']
 
@@ -42,9 +43,11 @@ export default function RelatoriosPage() {
   const [despesasCategoria, setDespesasCategoria] = useState<DespCatData[]>([])
   const [resumoMes, setResumoMes] = useState({ entradas: 0, saidas: 0, saldo: 0, despesasPagas: 0, despesasPendentes: 0 })
   const [loading, setLoading] = useState(true)
+  const { empresaId } = useEmpresa()
 
   const load = useCallback(async () => {
     setLoading(true)
+    const esc = <T,>(q: T): T => (empresaId ? (q as any).eq('empresa_id', empresaId) : q)
     const hoje = new Date()
 
     const mesesData: MesData[] = []
@@ -53,7 +56,7 @@ export default function RelatoriosPage() {
       const ini = format(startOfMonth(m), 'yyyy-MM-dd')
       const fim = format(endOfMonth(m), 'yyyy-MM-dd')
       const d = await fetchAllRows<{ tipo: string; valor: number }>(() =>
-        supabase.from('lancamentos').select('tipo, valor').gte('data', ini).lte('data', fim))
+        esc(supabase.from('lancamentos').select('tipo, valor').gte('data', ini).lte('data', fim)))
       const entradas = d.filter((l: any) => l.tipo === 'entrada').reduce((s: number, l: any) => s + Number(l.valor), 0)
       const saidas = d.filter((l: any) => l.tipo === 'saida').reduce((s: number, l: any) => s + Number(l.valor), 0)
       mesesData.push({
@@ -73,8 +76,8 @@ export default function RelatoriosPage() {
     const fim = format(endOfMonth(mesDate), 'yyyy-MM-dd')
 
     const [lancamentos, despesas] = await Promise.all([
-      fetchAllRows<any>(() => supabase.from('lancamentos').select('tipo, valor, categorias(nome), centros_custo(nome)').gte('data', ini).lte('data', fim)),
-      fetchAllRows<any>(() => supabase.from('despesas').select('status, valor, categorias(nome), centros_custo(nome)').gte('data_vencimento', ini).lte('data_vencimento', fim)),
+      fetchAllRows<any>(() => esc(supabase.from('lancamentos').select('tipo, valor, categorias(nome), centros_custo(nome)').gte('data', ini).lte('data', fim))),
+      fetchAllRows<any>(() => esc(supabase.from('despesas').select('status, valor, categorias(nome), centros_custo(nome)').gte('data_vencimento', ini).lte('data_vencimento', fim))),
     ])
     const entradas = lancamentos.filter((l: any) => l.tipo === 'entrada').reduce((s: number, l: any) => s + Number(l.valor), 0)
     const saidas = lancamentos.filter((l: any) => l.tipo === 'saida').reduce((s: number, l: any) => s + Number(l.valor), 0)
@@ -125,7 +128,7 @@ export default function RelatoriosPage() {
     )
 
     setLoading(false)
-  }, [mesSelecionado])
+  }, [mesSelecionado, empresaId])
 
   useEffect(() => { load() }, [load])
 

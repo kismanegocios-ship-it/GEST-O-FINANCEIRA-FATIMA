@@ -13,6 +13,7 @@ import { toast } from 'sonner'
 import { Plus, Pencil, Trash2, Building2, RefreshCw } from 'lucide-react'
 import type { ContaBancaria } from '@/lib/types'
 import { fetchAllRows } from '@/lib/fetch-all'
+import { useEmpresa } from '@/lib/empresa'
 
 interface FormData {
   nome: string
@@ -38,13 +39,18 @@ export default function ContasPage() {
 
   const [saldosPorConta, setSaldosPorConta] = useState<Record<string, number>>({})
 
+  const { empresaId } = useEmpresa()
+
   const load = useCallback(async () => {
     setLoading(true)
     // Paginado: soma TODOS os lancamentos (evita truncar em 1000 e errar o saldo)
     const [contasRes, lancs] = await Promise.all([
-      supabase.from('contas_bancarias').select('*').order('nome'),
-      fetchAllRows<{ valor: number; tipo: string; conta_bancaria_id: string }>(() =>
-        supabase.from('lancamentos').select('valor, tipo, conta_bancaria_id').not('conta_bancaria_id', 'is', null)),
+      (() => { let q = supabase.from('contas_bancarias').select('*').order('nome'); if (empresaId) q = q.eq('empresa_id', empresaId); return q })(),
+      fetchAllRows<{ valor: number; tipo: string; conta_bancaria_id: string }>(() => {
+        let q = supabase.from('lancamentos').select('valor, tipo, conta_bancaria_id').not('conta_bancaria_id', 'is', null)
+        if (empresaId) q = q.eq('empresa_id', empresaId)
+        return q
+      }),
     ])
     setContas((contasRes.data ?? []) as ContaBancaria[])
     const somas: Record<string, number> = {}
@@ -55,7 +61,7 @@ export default function ContasPage() {
     }
     setSaldosPorConta(somas)
     setLoading(false)
-  }, [])
+  }, [empresaId])
 
   useEffect(() => { load() }, [load])
 
@@ -93,7 +99,7 @@ export default function ContasPage() {
     }
     const { error } = editando
       ? await supabase.from('contas_bancarias').update(payload).eq('id', editando.id)
-      : await supabase.from('contas_bancarias').insert(payload)
+      : await supabase.from('contas_bancarias').insert({ ...payload, ...(empresaId ? { empresa_id: empresaId } : {}) })
     setSaving(false)
     if (error) { toast.error(`Erro: ${error.message}`); return }
     toast.success(editando ? 'Conta atualizada!' : 'Conta cadastrada!')

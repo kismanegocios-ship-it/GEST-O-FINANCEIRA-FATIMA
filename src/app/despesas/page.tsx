@@ -20,6 +20,7 @@ import {
 import type { Despesa, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
 import { format, addMonths, addDays, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns'
 import { fetchAllRows } from '@/lib/fetch-all'
+import { useEmpresa } from '@/lib/empresa'
 
 // Quantos meses a frente as contas recorrentes sao provisionadas
 const HORIZONTE_MESES = 12
@@ -83,6 +84,7 @@ export default function DespesasPage() {
   const [saving, setSaving] = useState(false)
   const [busca, setBusca] = useState('')
   const [filtroStatus, setFiltroStatus] = useState('todos')
+  const { empresaId } = useEmpresa()
   // Periodo por vencimento ('' = sem limite = todos)
   const [perIni, setPerIni] = useState('')
   const [perFim, setPerFim] = useState('')
@@ -221,14 +223,18 @@ export default function DespesasPage() {
   // com a MESMA descricao nas datas seguintes. Dedup por descricao + data
   // (nao depende de coluna extra no banco), e so estende pra frente.
   const provisionarRecorrencias = async () => {
-    const { data: templates, error } = await supabase
-      .from('despesas').select('*').eq('recorrente', true).neq('status', 'cancelado')
+    let qt = supabase.from('despesas').select('*').eq('recorrente', true).neq('status', 'cancelado')
+    if (empresaId) qt = qt.eq('empresa_id', empresaId)
+    const { data: templates, error } = await qt
     if (error || !templates || templates.length === 0) return
 
-    // Mapa descricao -> conjunto de datas ja existentes (qualquer despesa).
+    // Mapa descricao -> conjunto de datas ja existentes (da empresa atual).
     // Paginado: se truncasse em 1000, a dedup falharia e recriaria duplicatas.
-    const todas = await fetchAllRows<{ descricao: string; data_vencimento: string }>(() =>
-      supabase.from('despesas').select('descricao, data_vencimento'))
+    const todas = await fetchAllRows<{ descricao: string; data_vencimento: string }>(() => {
+      let q = supabase.from('despesas').select('descricao, data_vencimento')
+      if (empresaId) q = q.eq('empresa_id', empresaId)
+      return q
+    })
     const porDesc = new Map<string, Set<string>>()
     for (const r of todas) {
       const set = porDesc.get(r.descricao) ?? new Set<string>()
@@ -266,6 +272,7 @@ export default function DespesasPage() {
             frequencia: null,
             observacoes: t.observacoes ?? null,
             solicitante: t.solicitante ?? null,
+            ...(empresaId ? { empresa_id: empresaId } : {}),
           })
         }
         cursor = proximaDataRecorrencia(key, freq)
@@ -280,30 +287,31 @@ export default function DespesasPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
+    const escopo = <T,>(q: T): T => (empresaId ? (q as any).eq('empresa_id', empresaId) : q)
 
-    // Auto-vencimento: pendentes com data anterior a hoje → vencido
+    // Auto-vencimento: pendentes com data anterior a hoje → vencido (so da empresa atual)
     const hoje = format(new Date(), 'yyyy-MM-dd')
-    await supabase
+    await escopo(supabase
       .from('despesas')
       .update({ status: 'vencido' })
       .eq('status', 'pendente')
-      .lt('data_vencimento', hoje)
+      .lt('data_vencimento', hoje))
 
     // Gera as ocorrencias futuras das contas recorrentes (idempotente)
     await provisionarRecorrencias()
 
     const [d, cc, cat, cb] = await Promise.all([
-      fetchAllRows<Despesa>(() => supabase.from('despesas').select('*, centros_custo(*), categorias(*)').order('data_vencimento')),
-      supabase.from('centros_custo').select('*').eq('ativo', true).order('nome'),
-      supabase.from('categorias').select('*').eq('tipo', 'saida').order('nome'),
-      supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome'),
+      fetchAllRows<Despesa>(() => escopo(supabase.from('despesas').select('*, centros_custo(*), categorias(*)').order('data_vencimento'))),
+      escopo(supabase.from('centros_custo').select('*').eq('ativo', true).order('nome')),
+      escopo(supabase.from('categorias').select('*').eq('tipo', 'saida').order('nome')),
+      escopo(supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome')),
     ])
     setDespesas(d)
     setCentros(cc.data ?? [])
     setCategorias(cat.data ?? [])
     setContas((cb.data ?? []) as ContaBancaria[])
     setLoading(false)
-  }, [])
+  }, [empresaId])
 
   useEffect(() => { load() }, [load])
 
@@ -383,6 +391,7 @@ export default function DespesasPage() {
         frequencia: null,
         observacoes: form.observacoes || null,
         solicitante: form.solicitante || null,
+        ...(empresaId ? { empresa_id: empresaId } : {}),
       }))
       const { error } = await supabase.from('despesas').insert(registros)
       setSaving(false)
@@ -403,6 +412,7 @@ export default function DespesasPage() {
       recorrente: form.recorrente, frequencia: form.recorrente ? form.frequencia : null, observacoes: form.observacoes || null,
       solicitante: form.solicitante || null,
       data_pagamento: statusFinal === 'pago' ? hoje : null,
+      ...(empresaId && !editando ? { empresa_id: empresaId } : {}),
     }
     // So precisamos do id de volta quando ha anexo pra enviar. No caso comum,
     // insert/update simples (evita falha do .select().single() apos o insert).
@@ -444,6 +454,7 @@ export default function DespesasPage() {
           forma_pagamento: form.forma_pagamento || 'pix',
           conta_bancaria_id: form.conta_bancaria_id || null,
           conciliado: !!form.conta_bancaria_id,
+          ...(empresaId ? { empresa_id: empresaId } : {}),
         })
         toast.success(form.conta_bancaria_id ? 'Despesa paga e ja conciliada no fluxo de caixa! 💸' : 'Despesa marcada como paga e saída registrada no fluxo de caixa! 💸')
         setSaving(false); setModalOpen(false); load()
@@ -480,6 +491,7 @@ export default function DespesasPage() {
         conta_bancaria_id: pagContaId || null,
         observacoes: obs,
         conciliado: !!pagContaId,
+        ...(empresaId ? { empresa_id: empresaId } : {}),
       })
       toast.success(pagContaId ? 'Pagamento registrado e ja conciliado no caixa!' : 'Pagamento registrado! Saida lancada no caixa.')
     } else { toast.error('Erro ao registrar') }

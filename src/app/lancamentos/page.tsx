@@ -19,6 +19,7 @@ import {
 import type { Lancamento, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
 import { format, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns'
 import { fetchAllRows } from '@/lib/fetch-all'
+import { useEmpresa } from '@/lib/empresa'
 
 type ColKey = 'data' | 'descricao' | 'tipo' | 'valor' | 'saldo' | 'forma' | 'conta' | 'categoria' | 'centro' | 'conciliado'
 const COLS: { key: ColKey; label: string; align: 'left' | 'right' }[] = [
@@ -81,21 +82,24 @@ export default function LancamentosPage() {
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set())
   const [priorLancs, setPriorLancs] = useState<Pick<Lancamento, 'valor' | 'tipo' | 'conta_bancaria_id' | 'centro_custo_id' | 'categoria_id'>[]>([])
 
+  const { empresaId } = useEmpresa()
+
   const load = useCallback(async () => {
     setLoading(true)
     const ini = dataIni
     const fim = dataFim
+    const escopo = <T,>(q: T): T => (empresaId ? (q as any).eq('empresa_id', empresaId) : q)
     // Paginado: garante o saldo correto mesmo com +1000 lancamentos no historico
     const [l, cc, cat, cb, prior] = await Promise.all([
-      fetchAllRows<Lancamento>(() => supabase.from('lancamentos')
+      fetchAllRows<Lancamento>(() => escopo(supabase.from('lancamentos')
         .select('*, centros_custo(*), categorias(*), contas_bancarias(*)')
-        .gte('data', ini).lte('data', fim).order('data', { ascending: false })),
-      supabase.from('centros_custo').select('*').eq('ativo', true).order('nome'),
-      supabase.from('categorias').select('*').order('tipo').order('nome'),
-      supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome'),
-      fetchAllRows<typeof priorLancs[number]>(() => supabase.from('lancamentos')
+        .gte('data', ini).lte('data', fim).order('data', { ascending: false }))),
+      escopo(supabase.from('centros_custo').select('*').eq('ativo', true).order('nome')),
+      escopo(supabase.from('categorias').select('*').order('tipo').order('nome')),
+      escopo(supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome')),
+      fetchAllRows<typeof priorLancs[number]>(() => escopo(supabase.from('lancamentos')
         .select('valor, tipo, conta_bancaria_id, centro_custo_id, categoria_id')
-        .lt('data', ini)),
+        .lt('data', ini))),
     ])
     setLancamentos(l)
     setCentros(cc.data ?? [])
@@ -103,7 +107,7 @@ export default function LancamentosPage() {
     setContas((cb.data ?? []) as ContaBancaria[])
     setPriorLancs(prior)
     setLoading(false)
-  }, [dataIni, dataFim])
+  }, [dataIni, dataFim, empresaId])
 
   useEffect(() => { load() }, [load])
 
@@ -171,7 +175,7 @@ export default function LancamentosPage() {
 
     const { error } = editando
       ? await supabase.from('lancamentos').update(payload).eq('id', editando.id)
-      : await supabase.from('lancamentos').insert(payload)
+      : await supabase.from('lancamentos').insert({ ...payload, ...(empresaId ? { empresa_id: empresaId } : {}) })
 
     setSaving(false)
     if (error) { toast.error(`Erro: ${error.message}`); return }

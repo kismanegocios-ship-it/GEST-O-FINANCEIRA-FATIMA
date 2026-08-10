@@ -35,12 +35,20 @@ export type Database = {
   }
 }
 
+export interface Empresa {
+  id: string
+  nome: string
+  ativo: boolean
+  created_at: string
+}
+
 export interface CentroCusto {
   id: string
   nome: string
   descricao?: string
   cor: string
   ativo: boolean
+  empresa_id?: string | null
   created_at: string
 }
 
@@ -50,6 +58,7 @@ export interface Categoria {
   tipo: 'entrada' | 'saida'
   cor: string
   icone: string
+  empresa_id?: string | null
   created_at: string
 }
 
@@ -62,6 +71,7 @@ export interface ContaBancaria {
   tipo: string
   saldo_inicial: number
   ativo: boolean
+  empresa_id?: string | null
   created_at: string
 }
 
@@ -80,6 +90,7 @@ export interface Despesa {
   solicitante?: string | null
   anexo_path?: string | null
   anexo_nome?: string | null
+  empresa_id?: string | null
   created_at: string
   centros_custo?: CentroCusto
   categorias?: Categoria
@@ -98,6 +109,7 @@ export interface Lancamento {
   conciliado: boolean
   forma_pagamento: string
   observacoes?: string | null
+  empresa_id?: string | null
   created_at: string
   centros_custo?: CentroCusto
   categorias?: Categoria
@@ -114,6 +126,7 @@ export interface ExtratoManual {
   lancamento_id?: string | null
   conta_bancaria_id?: string | null
   observacoes?: string | null
+  empresa_id?: string | null
   created_at: string
   lancamentos?: Lancamento
   contas_bancarias?: ContaBancaria

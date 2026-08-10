@@ -2,6 +2,7 @@
 
 import { usePathname } from 'next/navigation'
 import { Wallet } from 'lucide-react'
+import { EmpresaSelector } from '@/components/layout/empresa-selector'
 
 const LABELS: Record<string, string> = {
   '/': 'Dashboard',
@@ -34,9 +35,11 @@ export function MobileHeader() {
             <p className="text-sm font-bold text-indigo-600 leading-tight">Fatima</p>
           </div>
         </div>
-        <h1 className="text-sm font-semibold text-slate-700">{label}</h1>
-        <div className="w-16" />
+        <div className="max-w-[45%]">
+          <EmpresaSelector compact />
+        </div>
       </div>
+      <p className="px-4 pb-1.5 -mt-1 text-[11px] text-slate-400">{label}</p>
     </header>
   )
 }

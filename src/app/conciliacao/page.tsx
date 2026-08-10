@@ -21,6 +21,7 @@ import type { ExtratoManual, Lancamento, ContaBancaria, Categoria, CentroCusto }
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import Papa from 'papaparse'
+import { useEmpresa } from '@/lib/empresa'
 
 interface ExtratoImportado {
   descricao: string
@@ -68,14 +69,17 @@ export default function ConciliacaoPage() {
     centro_custo_id: '', conta_bancaria_id: '', forma_pagamento: '', observacoes: '',
   })
 
+  const { empresaId } = useEmpresa()
+
   const load = useCallback(async () => {
     setLoading(true)
+    const escopo = <T,>(q: T): T => (empresaId ? (q as any).eq('empresa_id', empresaId) : q)
     const [ext, lanc, cb, cats, ccs] = await Promise.all([
-      supabase.from('extrato_manual').select('*, lancamentos(*), contas_bancarias(*)').order('data', { ascending: false }),
-      supabase.from('lancamentos').select('*').eq('conciliado', false).order('data', { ascending: false }),
-      supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome'),
-      supabase.from('categorias').select('*').order('nome'),
-      supabase.from('centros_custo').select('*').eq('ativo', true).order('nome'),
+      escopo(supabase.from('extrato_manual').select('*, lancamentos(*), contas_bancarias(*)').order('data', { ascending: false })),
+      escopo(supabase.from('lancamentos').select('*').eq('conciliado', false).order('data', { ascending: false })),
+      escopo(supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome')),
+      escopo(supabase.from('categorias').select('*').order('nome')),
+      escopo(supabase.from('centros_custo').select('*').eq('ativo', true).order('nome')),
     ])
     setExtratos((ext.data ?? []) as ExtratoManual[])
     setLancamentos((lanc.data ?? []) as Lancamento[])
@@ -83,7 +87,7 @@ export default function ConciliacaoPage() {
     setCategorias((cats.data ?? []) as Categoria[])
     setCentros((ccs.data ?? []) as CentroCusto[])
     setLoading(false)
-  }, [])
+  }, [empresaId])
 
   useEffect(() => { load() }, [load])
 
@@ -665,6 +669,7 @@ export default function ConciliacaoPage() {
         tipo: i.tipo,
         conciliado: false,
         conta_bancaria_id: importContaId || null,
+        ...(empresaId ? { empresa_id: empresaId } : {}),
       }))
     )
     setSalvandoImport(false)
@@ -685,6 +690,7 @@ export default function ConciliacaoPage() {
       tipo: form.tipo,
       conciliado: false,
       conta_bancaria_id: form.conta_bancaria_id || null,
+      ...(empresaId ? { empresa_id: empresaId } : {}),
     })
     setSaving(false)
     if (error) { toast.error('Erro ao salvar'); return }
@@ -732,6 +738,7 @@ export default function ConciliacaoPage() {
         forma_pagamento: formConciliar.forma_pagamento || null,
         observacoes:     formConciliar.observacoes     || null,
         conciliado: true,
+        ...(empresaId ? { empresa_id: empresaId } : {}),
       }).select().single()
 
       if (error || !novoLanc) {
@@ -760,8 +767,9 @@ export default function ConciliacaoPage() {
   // corrigir sozinho e avisa sobre o que precisa de decisao do usuario.
   const verificarConsistencia = async () => {
     setVerificando(true)
-    const { data: exts, error } = await supabase
-      .from('extrato_manual').select('id, lancamento_id').eq('conciliado', true)
+    let qv = supabase.from('extrato_manual').select('id, lancamento_id').eq('conciliado', true)
+    if (empresaId) qv = qv.eq('empresa_id', empresaId)
+    const { data: exts, error } = await qv
     if (error) { setVerificando(false); toast.error('Erro ao verificar: ' + error.message); return }
 
     const lista = exts ?? []

@@ -10,6 +10,7 @@ import { Modal } from '@/components/ui/modal'
 import { toast } from 'sonner'
 import { Plus, Pencil, Trash2, Briefcase } from 'lucide-react'
 import type { CentroCusto } from '@/lib/types'
+import { useEmpresa } from '@/lib/empresa'
 
 const CORES = [
   '#6366f1', '#3b82f6', '#22c55e', '#f59e0b', '#ef4444',
@@ -33,12 +34,16 @@ export default function CentrosCustoPage() {
   const [form, setForm] = useState<FormData>(emptyForm)
   const [saving, setSaving] = useState(false)
 
+  const { empresaId } = useEmpresa()
+
   const load = useCallback(async () => {
     setLoading(true)
-    const { data } = await supabase.from('centros_custo').select('*').order('nome')
+    let q = supabase.from('centros_custo').select('*').order('nome')
+    if (empresaId) q = q.eq('empresa_id', empresaId)
+    const { data } = await q
     setCentros(data ?? [])
     setLoading(false)
-  }, [])
+  }, [empresaId])
 
   useEffect(() => { load() }, [load])
 
@@ -60,9 +65,9 @@ export default function CentrosCustoPage() {
     const payload = { nome: form.nome, descricao: form.descricao || null, cor: form.cor, ativo: form.ativo }
     const { error } = editando
       ? await supabase.from('centros_custo').update(payload as any).eq('id', editando.id)
-      : await supabase.from('centros_custo').insert(payload as any)
+      : await supabase.from('centros_custo').insert({ ...payload, ...(empresaId ? { empresa_id: empresaId } : {}) } as any)
     setSaving(false)
-    if (error) { toast.error('Erro ao salvar'); return }
+    if (error) { toast.error('Erro ao salvar: ' + error.message); return }
     toast.success(editando ? 'Centro atualizado!' : 'Centro criado!')
     setModalOpen(false)
     load()

@@ -15,6 +15,7 @@ import {
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import type { Lancamento, Despesa } from '@/lib/types'
+import { useEmpresa } from '@/lib/empresa'
 
 const COLORS = ['#6366f1', '#f472b6', '#22c55e', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6']
 
@@ -34,26 +35,28 @@ export default function Dashboard() {
   const [graficoMensal, setGraficoMensal] = useState<ResumoMes[]>([])
   const [graficoCategorias, setGraficoCategorias] = useState<{ nome: string; valor: number }[]>([])
   const [loading, setLoading] = useState(true)
+  const { empresaId } = useEmpresa()
 
   useEffect(() => {
     async function load() {
+      const esc = <T,>(q: T): T => (empresaId ? (q as any).eq('empresa_id', empresaId) : q)
       const hoje = new Date()
       const hojeStr = format(hoje, 'yyyy-MM-dd')
       const inicioMes = format(startOfMonth(hoje), 'yyyy-MM-dd')
       const fimMes = format(endOfMonth(hoje), 'yyyy-MM-dd')
 
-      // Auto-vencimento: pendentes com data anterior a hoje → vencido
-      await supabase
+      // Auto-vencimento: pendentes com data anterior a hoje → vencido (so da empresa atual)
+      await esc(supabase
         .from('despesas')
         .update({ status: 'vencido' })
         .eq('status', 'pendente')
-        .lt('data_vencimento', hojeStr)
+        .lt('data_vencimento', hojeStr))
 
       const [lanc, desp, lancRecentes, despVencendo] = await Promise.all([
-        supabase.from('lancamentos').select('*').gte('data', inicioMes).lte('data', fimMes),
-        supabase.from('despesas').select('*').in('status', ['pendente', 'vencido']),
-        supabase.from('lancamentos').select('*, centros_custo(*), categorias(*)').order('data', { ascending: false }).limit(5),
-        supabase.from('despesas').select('*, centros_custo(*), categorias(*)').eq('status', 'pendente').gte('data_vencimento', format(hoje, 'yyyy-MM-dd')).order('data_vencimento', { ascending: true }).limit(5),
+        esc(supabase.from('lancamentos').select('*').gte('data', inicioMes).lte('data', fimMes)),
+        esc(supabase.from('despesas').select('*').in('status', ['pendente', 'vencido'])),
+        esc(supabase.from('lancamentos').select('*, centros_custo(*), categorias(*)').order('data', { ascending: false }).limit(5)),
+        esc(supabase.from('despesas').select('*, centros_custo(*), categorias(*)').eq('status', 'pendente').gte('data_vencimento', format(hoje, 'yyyy-MM-dd')).order('data_vencimento', { ascending: true }).limit(5)),
       ])
 
       const lancamentos = lanc.data ?? []
@@ -74,7 +77,7 @@ export default function Dashboard() {
         const m = subMonths(hoje, i)
         const ini = format(startOfMonth(m), 'yyyy-MM-dd')
         const fim = format(endOfMonth(m), 'yyyy-MM-dd')
-        const { data } = await supabase.from('lancamentos').select('tipo, valor').gte('data', ini).lte('data', fim)
+        const { data } = await esc(supabase.from('lancamentos').select('tipo, valor').gte('data', ini).lte('data', fim))
         const d = data ?? []
         meses.push({
           mes: format(m, 'MMM', { locale: ptBR }),
@@ -85,7 +88,7 @@ export default function Dashboard() {
       setGraficoMensal(meses)
 
       const catMap: Record<string, number> = {}
-      const { data: saidasCat } = await supabase.from('lancamentos').select('valor, categorias(nome)').eq('tipo', 'saida').gte('data', inicioMes).lte('data', fimMes)
+      const { data: saidasCat } = await esc(supabase.from('lancamentos').select('valor, categorias(nome)').eq('tipo', 'saida').gte('data', inicioMes).lte('data', fimMes))
       for (const l of saidasCat ?? []) {
         const cat = (l as any).categorias?.nome ?? 'Sem categoria'
         catMap[cat] = (catMap[cat] ?? 0) + Number(l.valor)
@@ -95,7 +98,7 @@ export default function Dashboard() {
       setLoading(false)
     }
     load()
-  }, [])
+  }, [empresaId])
 
   const saldo = totalEntradas - totalSaidas
 
