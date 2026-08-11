@@ -21,6 +21,8 @@ import type { Despesa, CentroCusto, Categoria, ContaBancaria } from '@/lib/types
 import { format, addMonths, addDays, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns'
 import { fetchAllRows } from '@/lib/fetch-all'
 import { useEmpresa } from '@/lib/empresa'
+import { useTags } from '@/lib/use-tags'
+import type { Tag } from '@/lib/types'
 
 // Quantos meses a frente as contas recorrentes sao provisionadas
 const HORIZONTE_MESES = 12
@@ -47,12 +49,14 @@ interface FormData {
   descricao: string; valor: string; data_vencimento: string; status: string
   centro_custo_id: string; categoria_id: string; recorrente: boolean; frequencia: string; observacoes: string
   parcelado: boolean; num_parcelas: string; solicitante: string; conta_bancaria_id: string; forma_pagamento: string
+  tag_ids: string[]
 }
 
 const emptyForm: FormData = {
   descricao: '', valor: '', data_vencimento: '', status: 'pendente',
   centro_custo_id: '', categoria_id: '', recorrente: false, frequencia: 'mensal', observacoes: '',
   parcelado: false, num_parcelas: '2', solicitante: '', conta_bancaria_id: '', forma_pagamento: 'pix',
+  tag_ids: [],
 }
 
 // Monta a lista padrao de parcelas: mesmo valor, vencimentos mensais
@@ -85,6 +89,12 @@ export default function DespesasPage() {
   const [busca, setBusca] = useState('')
   const [filtroStatus, setFiltroStatus] = useState('todos')
   const { empresaId } = useEmpresa()
+  const { tags, criar: criarTag, renomear: renomearTag, excluir: excluirTag } = useTags(empresaId)
+  const [filtroTags, setFiltroTags] = useState<Set<string>>(new Set())
+  const [gerenciarTags, setGerenciarTags] = useState(false)
+  const [novaTagNome, setNovaTagNome] = useState('')
+  const [novaTagCor, setNovaTagCor] = useState('#6366f1')
+  const [tagMenuOpen, setTagMenuOpen] = useState(false)
   // Periodo por vencimento ('' = sem limite = todos)
   const [perIni, setPerIni] = useState('')
   const [perFim, setPerFim] = useState('')
@@ -337,6 +347,7 @@ export default function DespesasPage() {
       status: d.status, centro_custo_id: d.centro_custo_id ?? '', categoria_id: d.categoria_id ?? '',
       recorrente: d.recorrente, frequencia: d.frequencia ?? 'mensal', observacoes: d.observacoes ?? '',
       parcelado: false, num_parcelas: '2', solicitante: d.solicitante ?? '', conta_bancaria_id: '', forma_pagamento: 'pix',
+      tag_ids: d.tag_ids ?? [],
     })
     setModalOpen(true)
   }
@@ -352,6 +363,7 @@ export default function DespesasPage() {
       status: 'pendente', centro_custo_id: d.centro_custo_id ?? '', categoria_id: d.categoria_id ?? '',
       recorrente: d.recorrente, frequencia: d.frequencia ?? 'mensal', observacoes: d.observacoes ?? '',
       parcelado: false, num_parcelas: '2', solicitante: d.solicitante ?? '', conta_bancaria_id: '', forma_pagamento: 'pix',
+      tag_ids: d.tag_ids ?? [],
     })
     setModalOpen(true)
   }
@@ -391,6 +403,7 @@ export default function DespesasPage() {
         frequencia: null,
         observacoes: form.observacoes || null,
         solicitante: form.solicitante || null,
+        tag_ids: form.tag_ids.length > 0 ? form.tag_ids : null,
         ...(empresaId ? { empresa_id: empresaId } : {}),
       }))
       const { error } = await supabase.from('despesas').insert(registros)
@@ -412,6 +425,7 @@ export default function DespesasPage() {
       recorrente: form.recorrente, frequencia: form.recorrente ? form.frequencia : null, observacoes: form.observacoes || null,
       solicitante: form.solicitante || null,
       data_pagamento: statusFinal === 'pago' ? hoje : null,
+      tag_ids: form.tag_ids.length > 0 ? form.tag_ids : null,
       ...(empresaId && !editando ? { empresa_id: empresaId } : {}),
     }
     // So precisamos do id de volta quando ha anexo pra enviar. No caso comum,
@@ -607,8 +621,18 @@ export default function DespesasPage() {
     const ms = filtroStatus === 'todos' || d.status === filtroStatus
     const dv = d.data_vencimento ?? ''
     const mm = (perIni === '' || dv >= perIni) && (perFim === '' || dv <= perFim)
-    return mb && ms && mm
+    const mt = filtroTags.size === 0 || (d.tag_ids ?? []).some(id => filtroTags.has(id))
+    return mb && ms && mm && mt
   })
+
+  const tagById = (id: string): Tag | undefined => tags.find(t => t.id === id)
+  const toggleTagForm = (id: string) => setForm(f => ({ ...f, tag_ids: f.tag_ids.includes(id) ? f.tag_ids.filter(x => x !== id) : [...f.tag_ids, id] }))
+  const salvarNovaTag = async () => {
+    if (!novaTagNome.trim()) { toast.error('Informe o nome da tag'); return }
+    const ok = await criarTag(novaTagNome.trim(), novaTagCor)
+    if (!ok) { toast.error('Erro ao criar tag'); return }
+    setNovaTagNome(''); setNovaTagCor('#6366f1'); toast.success('Tag criada!')
+  }
 
   // Totais acompanham o que esta filtrado na tela (busca + status)
   const totais = {
@@ -734,6 +758,31 @@ export default function DespesasPage() {
               </button>
             </div>
           </div>
+          {/* Tags */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-slate-400 font-medium">Tags:</span>
+            {tags.length === 0 ? (
+              <span className="text-xs text-slate-400">nenhuma criada</span>
+            ) : tags.map(t => {
+              const on = filtroTags.has(t.id)
+              return (
+                <button key={t.id}
+                  onClick={() => setFiltroTags(prev => { const n = new Set(prev); if (n.has(t.id)) n.delete(t.id); else n.add(t.id); return n })}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${on ? 'text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+                  style={on ? { background: t.cor, borderColor: t.cor } : { borderColor: t.cor }}
+                >
+                  <span className="w-2 h-2 rounded-full" style={{ background: on ? '#fff' : t.cor }} />
+                  {t.nome}
+                </button>
+              )
+            })}
+            <button onClick={() => setGerenciarTags(true)} className="px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-500 hover:bg-slate-200 transition-all">
+              + Gerenciar tags
+            </button>
+            {filtroTags.size > 0 && (
+              <button onClick={() => setFiltroTags(new Set())} className="text-xs text-slate-400 hover:text-slate-600">limpar</button>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -760,6 +809,13 @@ export default function DespesasPage() {
                 <tr key={d.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-6 py-3">
                     <p className="font-medium text-slate-800">{d.descricao}</p>
+                    {(d.tag_ids ?? []).length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {(d.tag_ids ?? []).map(id => { const t = tagById(id); return t ? (
+                          <span key={id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold text-white" style={{ background: t.cor }}>{t.nome}</span>
+                        ) : null })}
+                      </div>
+                    )}
                     {d.recorrente && <span className="text-xs text-indigo-500">Recorrente · {d.frequencia}</span>}
                     {d.solicitante && <p className="text-xs text-slate-400 mt-0.5">Solicitado por: {d.solicitante}</p>}
                   </td>
@@ -832,6 +888,15 @@ export default function DespesasPage() {
                     </p>
                   </div>
                 </div>
+
+                {/* Tags */}
+                {(d.tag_ids ?? []).length > 0 && (
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    {(d.tag_ids ?? []).map(id => { const t = tagById(id); return t ? (
+                      <span key={id} className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold text-white" style={{ background: t.cor }}>{t.nome}</span>
+                    ) : null })}
+                  </div>
+                )}
 
                 {/* Linha 3: centro de custo + solicitante */}
                 <div className="flex items-center gap-2 flex-wrap mb-2">
@@ -1153,6 +1218,31 @@ export default function DespesasPage() {
             <textarea className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/30" rows={2} value={form.observacoes} onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))} />
           </div>
 
+          {/* Tags coloridas */}
+          <div className="col-span-1 sm:col-span-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-medium text-slate-600">Tags</label>
+              <button type="button" onClick={() => setGerenciarTags(true)} className="text-xs text-indigo-600 hover:underline">+ Criar/gerenciar</button>
+            </div>
+            {tags.length === 0 ? (
+              <p className="text-xs text-slate-400">Nenhuma tag ainda. Clique em &quot;Criar/gerenciar&quot; para adicionar.</p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {tags.map(t => {
+                  const on = form.tag_ids.includes(t.id)
+                  return (
+                    <button key={t.id} type="button" onClick={() => toggleTagForm(t.id)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${on ? 'text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+                      style={on ? { background: t.cor, borderColor: t.cor } : { borderColor: t.cor }}>
+                      <span className="w-2 h-2 rounded-full" style={{ background: on ? '#fff' : t.cor }} />
+                      {t.nome}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Comprovante (anexo) — some quando esta criando parcelas */}
           {!(form.parcelado && !editando) && (
             <div className="col-span-1 sm:col-span-2">
@@ -1264,6 +1354,44 @@ export default function DespesasPage() {
           </div>
         )}
       </Modal>
+
+      {/* Modal Gerenciar Tags */}
+      <Modal open={gerenciarTags} onClose={() => setGerenciarTags(false)} title="Tags" size="sm">
+        <div className="space-y-4">
+          {/* Criar nova */}
+          <div className="bg-slate-50 rounded-xl p-3 space-y-2.5">
+            <p className="text-xs font-semibold text-slate-500 uppercase">Nova tag</p>
+            <Input placeholder="Nome da tag (ex: Parcelado, Urgente...)" value={novaTagNome} onChange={e => setNovaTagNome(e.target.value)} />
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {TAG_CORES.map(cor => (
+                <button key={cor} type="button" onClick={() => setNovaTagCor(cor)}
+                  className={`w-7 h-7 rounded-lg transition-all ${novaTagCor === cor ? 'ring-2 ring-offset-2 ring-slate-400 scale-110' : ''}`}
+                  style={{ background: cor }} />
+              ))}
+            </div>
+            <Button onClick={salvarNovaTag} size="sm" className="w-full"><Plus size={14} /> Criar tag</Button>
+          </div>
+
+          {/* Lista existentes */}
+          <div className="space-y-1.5 max-h-64 overflow-y-auto">
+            {tags.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-3">Nenhuma tag criada ainda</p>
+            ) : tags.map(t => (
+              <div key={t.id} className="flex items-center gap-2 p-2 rounded-xl bg-white border border-slate-100">
+                <input type="color" value={t.cor} onChange={e => renomearTag(t.id, t.nome, e.target.value)} className="w-7 h-7 rounded cursor-pointer border-0 bg-transparent p-0" title="Trocar cor" />
+                <input
+                  className="flex-1 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                  defaultValue={t.nome}
+                  onBlur={e => { if (e.target.value.trim() && e.target.value !== t.nome) renomearTag(t.id, e.target.value.trim(), t.cor) }}
+                />
+                <button onClick={async () => { if (confirm(`Excluir a tag "${t.nome}"?`)) { await excluirTag(t.id); setFiltroTags(prev => { const n = new Set(prev); n.delete(t.id); return n }) } }} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400" title="Excluir"><Trash2 size={14} /></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }
+
+const TAG_CORES = ['#6366f1', '#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#f472b6', '#06b6d4', '#84cc16', '#14b8a6', '#64748b', '#eab308']

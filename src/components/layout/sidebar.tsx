@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   LayoutDashboard, FileText, ArrowLeftRight, GitMerge,
-  Calendar, BarChart3, Briefcase, Wallet, LogOut, Building2, Tag,
+  Calendar, BarChart3, Briefcase, Wallet, LogOut, Building2, Tag, HandCoins,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase-browser'
@@ -13,6 +13,7 @@ import { EmpresaSelector } from '@/components/layout/empresa-selector'
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/despesas', label: 'Contas a Pagar', icon: FileText },
+  { href: '/contas-receber', label: 'Contas a Receber', icon: HandCoins },
   { href: '/lancamentos', label: 'Lancamentos', icon: ArrowLeftRight },
   { href: '/conciliacao', label: 'Conciliacao', icon: GitMerge },
   { href: '/calendario', label: 'Calendario', icon: Calendar },

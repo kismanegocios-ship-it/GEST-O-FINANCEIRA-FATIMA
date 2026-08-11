@@ -7,6 +7,7 @@ import { EmpresaSelector } from '@/components/layout/empresa-selector'
 const LABELS: Record<string, string> = {
   '/': 'Dashboard',
   '/despesas': 'Contas a Pagar',
+  '/contas-receber': 'Contas a Receber',
   '/lancamentos': 'Lancamentos',
   '/conciliacao': 'Conciliacao',
   '/calendario': 'Calendario',

@@ -2,14 +2,14 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, FileText, ArrowLeftRight, Calendar, BarChart3 } from 'lucide-react'
+import { LayoutDashboard, FileText, ArrowLeftRight, Calendar, BarChart3, HandCoins } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const items = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/despesas', label: 'Contas', icon: FileText },
+  { href: '/despesas', label: 'Pagar', icon: FileText },
+  { href: '/contas-receber', label: 'Receber', icon: HandCoins },
   { href: '/lancamentos', label: 'Caixa', icon: ArrowLeftRight },
-  { href: '/calendario', label: 'Agenda', icon: Calendar },
   { href: '/relatorios', label: 'Relatorios', icon: BarChart3 },
 ]
 

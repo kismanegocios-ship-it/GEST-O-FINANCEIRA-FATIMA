@@ -42,6 +42,31 @@ export interface Empresa {
   created_at: string
 }
 
+export interface Tag {
+  id: string
+  nome: string
+  cor: string
+  empresa_id?: string | null
+  created_at: string
+}
+
+export interface ContaReceber {
+  id: string
+  descricao: string
+  valor: number
+  data_vencimento: string
+  data_recebimento?: string | null
+  status: 'pendente' | 'recebido' | 'vencido' | 'cancelado'
+  centro_custo_id?: string | null
+  categoria_id?: string | null
+  conta_bancaria_id?: string | null
+  observacoes?: string | null
+  empresa_id?: string | null
+  created_at: string
+  centros_custo?: CentroCusto
+  categorias?: Categoria
+}
+
 export interface CentroCusto {
   id: string
   nome: string
@@ -90,6 +115,7 @@ export interface Despesa {
   solicitante?: string | null
   anexo_path?: string | null
   anexo_nome?: string | null
+  tag_ids?: string[] | null
   empresa_id?: string | null
   created_at: string
   centros_custo?: CentroCusto
