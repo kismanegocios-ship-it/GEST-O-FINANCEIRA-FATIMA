@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
-import { formatCurrency, formatDate, getStatusLabel, googleCalendarLink } from '@/lib/utils'
+import { formatCurrency, formatDate, getStatusLabel, googleCalendarLink, getFormaPagamentoLabel } from '@/lib/utils'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -94,7 +94,9 @@ export default function DespesasPage() {
   const [gerenciarTags, setGerenciarTags] = useState(false)
   const [novaTagNome, setNovaTagNome] = useState('')
   const [novaTagCor, setNovaTagCor] = useState('#6366f1')
-  const [tagMenuOpen, setTagMenuOpen] = useState(false)
+  // Detalhes da conta (clicar na linha)
+  const [detalhe, setDetalhe] = useState<Despesa | null>(null)
+  const [detalheLanc, setDetalheLanc] = useState<{ conta?: string; forma?: string; data?: string; valor?: number } | null>(null)
   // Periodo por vencimento ('' = sem limite = todos)
   const [perIni, setPerIni] = useState('')
   const [perFim, setPerFim] = useState('')
@@ -350,6 +352,20 @@ export default function DespesasPage() {
       tag_ids: d.tag_ids ?? [],
     })
     setModalOpen(true)
+  }
+
+  // Abre o painel de detalhes ao clicar na conta. Se estiver paga, busca o
+  // lancamento vinculado pra mostrar quando foi pago, de qual banco e a forma.
+  const abrirDetalhe = async (d: Despesa) => {
+    setDetalhe(d)
+    setDetalheLanc(null)
+    if (d.status === 'pago') {
+      const { data } = await supabase.from('lancamentos')
+        .select('valor, data, forma_pagamento, contas_bancarias(nome)')
+        .eq('despesa_id', d.id).order('data', { ascending: false }).limit(1)
+      const l = (data ?? [])[0] as any
+      if (l) setDetalheLanc({ conta: l.contas_bancarias?.nome, forma: l.forma_pagamento, data: l.data, valor: Number(l.valor) })
+    }
   }
 
   // Duplicar: abre o modal como NOVA despesa ja preenchida com os dados da
@@ -808,7 +824,9 @@ export default function DespesasPage() {
               ) : filtradas.map(d => (
                 <tr key={d.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-6 py-3">
-                    <p className="font-medium text-slate-800">{d.descricao}</p>
+                    <button onClick={() => abrirDetalhe(d)} className="text-left group/desc">
+                      <p className="font-medium text-slate-800 group-hover/desc:text-indigo-600 group-hover/desc:underline transition-colors">{d.descricao}</p>
+                    </button>
                     {(d.tag_ids ?? []).length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1">
                         {(d.tag_ids ?? []).map(id => { const t = tagById(id); return t ? (
@@ -816,6 +834,7 @@ export default function DespesasPage() {
                         ) : null })}
                       </div>
                     )}
+                    {d.status === 'pago' && d.data_pagamento && <p className="text-xs text-green-600 mt-0.5">✓ Pago em {formatDate(d.data_pagamento)}</p>}
                     {d.recorrente && <span className="text-xs text-indigo-500">Recorrente · {d.frequencia}</span>}
                     {d.solicitante && <p className="text-xs text-slate-400 mt-0.5">Solicitado por: {d.solicitante}</p>}
                   </td>
@@ -867,12 +886,15 @@ export default function DespesasPage() {
               <MobileCard key={d.id} className="py-4">
                 {/* Linha 1: descrição + badge status */}
                 <div className="flex items-start justify-between gap-2 mb-2">
-                  <div className="flex-1 min-w-0">
+                  <button onClick={() => abrirDetalhe(d)} className="flex-1 min-w-0 text-left">
                     <p className="font-bold text-slate-800 text-sm leading-tight">{d.descricao}</p>
-                    {d.recorrente && (
-                      <span className="text-[10px] text-indigo-500 font-medium">↻ Recorrente · {d.frequencia}</span>
+                    {d.status === 'pago' && d.data_pagamento && (
+                      <span className="text-[10px] text-green-600 font-medium">✓ Pago em {formatDate(d.data_pagamento)}</span>
                     )}
-                  </div>
+                    {d.recorrente && (
+                      <span className="text-[10px] text-indigo-500 font-medium block">↻ Recorrente · {d.frequencia}</span>
+                    )}
+                  </button>
                   <Badge variant={statusVariant[d.status]}>{getStatusLabel(d.status)}</Badge>
                 </div>
 
@@ -1389,6 +1411,63 @@ export default function DespesasPage() {
             ))}
           </div>
         </div>
+      </Modal>
+
+      {/* Modal Detalhes da conta */}
+      <Modal open={!!detalhe} onClose={() => setDetalhe(null)} title="Detalhes da conta" size="sm">
+        {detalhe && (
+          <div className="space-y-4">
+            <div className="bg-slate-50 rounded-xl p-4">
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-semibold text-slate-800">{detalhe.descricao}</p>
+                <Badge variant={statusVariant[detalhe.status]}>{getStatusLabel(detalhe.status)}</Badge>
+              </div>
+              <p className="text-2xl font-bold text-slate-800 mt-1">{formatCurrency(Number(detalhe.valor))}</p>
+              {(detalhe.tag_ids ?? []).length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {(detalhe.tag_ids ?? []).map(id => { const t = tagById(id); return t ? (
+                    <span key={id} className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold text-white" style={{ background: t.cor }}>{t.nome}</span>
+                  ) : null })}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between"><span className="text-slate-500">Vencimento</span><span className="text-slate-800 font-medium">{formatDate(detalhe.data_vencimento)}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Categoria</span><span className="text-slate-800 font-medium">{(detalhe as any).categorias?.nome ?? '—'}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Centro de custo</span><span className="text-slate-800 font-medium">{(detalhe as any).centros_custo?.nome ?? '—'}</span></div>
+              {detalhe.solicitante && <div className="flex justify-between"><span className="text-slate-500">Solicitado por</span><span className="text-slate-800 font-medium">{detalhe.solicitante}</span></div>}
+              {detalhe.recorrente && <div className="flex justify-between"><span className="text-slate-500">Recorrencia</span><span className="text-slate-800 font-medium capitalize">{detalhe.frequencia}</span></div>}
+            </div>
+
+            {/* Bloco de pagamento (so quando paga) */}
+            {detalhe.status === 'pago' && (
+              <div className="bg-green-50 border border-green-100 rounded-xl p-3 space-y-2 text-sm">
+                <p className="text-xs font-semibold text-green-700 uppercase">Pagamento</p>
+                <div className="flex justify-between"><span className="text-slate-500">Pago em</span><span className="text-slate-800 font-medium">{detalhe.data_pagamento ? formatDate(detalhe.data_pagamento) : (detalheLanc?.data ? formatDate(detalheLanc.data) : '—')}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Banco</span><span className="text-slate-800 font-medium">{detalheLanc?.conta ?? 'Sem banco informado'}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Forma</span><span className="text-slate-800 font-medium">{detalheLanc?.forma ? getFormaPagamentoLabel(detalheLanc.forma) : '—'}</span></div>
+                {detalheLanc?.valor != null && detalheLanc.valor !== Number(detalhe.valor) && (
+                  <div className="flex justify-between"><span className="text-slate-500">Valor pago</span><span className="text-slate-800 font-medium">{formatCurrency(detalheLanc.valor)}</span></div>
+                )}
+              </div>
+            )}
+
+            {detalhe.observacoes && (
+              <div>
+                <p className="text-xs font-medium text-slate-500 mb-1">Observacoes</p>
+                <p className="text-sm text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-2.5">{detalhe.observacoes}</p>
+              </div>
+            )}
+
+            <div className="flex justify-between gap-2 pt-3 border-t border-slate-100">
+              {detalhe.anexo_path ? (
+                <Button variant="secondary" size="sm" onClick={() => abrirAnexo(detalhe)}><Eye size={14} /> Ver comprovante</Button>
+              ) : <span />}
+              <Button size="sm" onClick={() => { const d = detalhe; setDetalhe(null); abrirEditar(d) }}><Pencil size={14} /> Editar</Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   )
