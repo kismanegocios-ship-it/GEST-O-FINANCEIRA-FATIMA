@@ -88,7 +88,7 @@ export default function DespesasPage() {
   const [saving, setSaving] = useState(false)
   const [busca, setBusca] = useState('')
   const [filtroStatus, setFiltroStatus] = useState('todos')
-  const { empresaId } = useEmpresa()
+  const { empresaId, empresa } = useEmpresa()
   const { tags, criar: criarTag, renomear: renomearTag, excluir: excluirTag } = useTags(empresaId)
   const [filtroTags, setFiltroTags] = useState<Set<string>>(new Set())
   const [gerenciarTags, setGerenciarTags] = useState(false)
@@ -556,17 +556,23 @@ export default function DespesasPage() {
 
   const escHtml = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
 
-  // PDF das contas exibidas (respeita mes, status e busca)
+  // PDF das contas exibidas (respeita filtros) — layout relatorio
   const exportarPDF = () => {
     const lista = [...filtradas].sort((a, b) => (a.data_vencimento < b.data_vencimento ? -1 : 1))
     if (lista.length === 0) { toast.error('Nenhuma conta para exportar com os filtros atuais'); return }
 
-    const statusPdf: Record<string, string> = { pendente: '#ca8a04', vencido: '#dc2626', pago: '#16a34a', cancelado: '#64748b' }
+    const statusPdf: Record<string, { c: string; bg: string }> = {
+      pendente: { c: '#b45309', bg: '#fef3c7' },
+      vencido: { c: '#b91c1c', bg: '#fee2e2' },
+      pago: { c: '#15803d', bg: '#dcfce7' },
+      cancelado: { c: '#475569', bg: '#f1f5f9' },
+    }
     const escopo = [
-      (perIni || perFim) && `Vencimento: ${perIni ? formatDate(perIni) : '...'} a ${perFim ? formatDate(perFim) : '...'}`,
-      filtroStatus !== 'todos' && `Status: ${getStatusLabel(filtroStatus)}`,
-      busca && `Busca: "${busca}"`,
-    ].filter(Boolean).map(t => escHtml(t as string)).join(' &nbsp;|&nbsp; ') || 'Todas as contas'
+      (perIni || perFim) ? `Vencimento: ${perIni ? formatDate(perIni) : '...'} a ${perFim ? formatDate(perFim) : '...'}` : '',
+      filtroStatus !== 'todos' ? `Status: ${getStatusLabel(filtroStatus)}` : '',
+      busca ? `Busca: "${busca}"` : '',
+      filtroTags.size > 0 ? `Tags: ${tags.filter(t => filtroTags.has(t.id)).map(t => t.nome).join(', ')}` : '',
+    ].filter(Boolean).map(t => escHtml(t as string)).join(' &nbsp;•&nbsp; ') || 'Todas as contas'
 
     const totalGeral = lista.reduce((s, d) => s + Number(d.valor), 0)
     const porStatus = {
@@ -574,54 +580,126 @@ export default function DespesasPage() {
       vencido: lista.filter(d => d.status === 'vencido').reduce((s, d) => s + Number(d.valor), 0),
       pago: lista.filter(d => d.status === 'pago').reduce((s, d) => s + Number(d.valor), 0),
     }
+    const pctPago = totalGeral > 0 ? (porStatus.pago / totalGeral) * 100 : 0
 
-    const linhas = lista.map(d => `
-      <tr>
-        <td>${escHtml(d.descricao)}${d.solicitante ? `<br><span style="color:#94a3b8;font-size:9px">Solicitado por: ${escHtml(d.solicitante)}</span>` : ''}</td>
+    // Quebra por centro de custo
+    const ccMap = new Map<string, number>()
+    for (const d of lista) {
+      const nome = (d as any).centros_custo?.nome ?? 'Sem centro de custo'
+      ccMap.set(nome, (ccMap.get(nome) ?? 0) + Number(d.valor))
+    }
+    const porCentro = Array.from(ccMap.entries()).sort((a, b) => b[1] - a[1])
+    const maxCentro = Math.max(...porCentro.map(c => c[1]), 1)
+
+    const geradoEm = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    const nomeEmpresa = escHtml(empresa?.nome ?? 'Sistema Financeiro Fatima')
+
+    const linhasCentro = porCentro.map(([nome, valor]) => {
+      const pct = totalGeral > 0 ? (valor / totalGeral) * 100 : 0
+      const barra = (valor / maxCentro) * 100
+      return `<tr>
+        <td>${escHtml(nome)}</td>
+        <td class="num">${formatCurrency(valor)}</td>
+        <td class="num">${pct.toFixed(1)}%</td>
+        <td style="width:38%"><div class="bar"><span style="width:${barra}%"></span></div></td>
+      </tr>`
+    }).join('')
+
+    const linhasDet = lista.map((d, i) => {
+      const st = statusPdf[d.status] ?? statusPdf.pendente
+      const pct = totalGeral > 0 ? (Number(d.valor) / totalGeral) * 100 : 0
+      const sub = [d.solicitante ? `Solicitado por: ${escHtml(d.solicitante)}` : '', d.status === 'pago' && d.data_pagamento ? `Pago em ${formatDate(d.data_pagamento)}` : ''].filter(Boolean).join(' • ')
+      return `<tr>
+        <td class="idx">${i + 1}</td>
+        <td><strong>${escHtml(d.descricao)}</strong>${sub ? `<br><span class="muted">${sub}</span>` : ''}</td>
         <td>${formatDate(d.data_vencimento)}</td>
         <td>${escHtml((d as any).centros_custo?.nome ?? '—')}</td>
         <td>${escHtml((d as any).categorias?.nome ?? '—')}</td>
-        <td style="color:${statusPdf[d.status] ?? '#334155'};font-weight:600">${getStatusLabel(d.status)}</td>
-        <td style="text-align:right;font-weight:600">${formatCurrency(Number(d.valor))}</td>
-      </tr>`).join('')
+        <td class="num">${formatCurrency(Number(d.valor))}</td>
+        <td class="num muted">${pct.toFixed(1)}%</td>
+        <td><span class="pill" style="color:${st.c};background:${st.bg}">${getStatusLabel(d.status)}</span></td>
+      </tr>`
+    }).join('')
 
     const html = `
       <!DOCTYPE html><html lang="pt-BR"><head>
-      <meta charset="UTF-8"><title>Contas a Pagar</title>
+      <meta charset="UTF-8"><title>Contas a Pagar — ${nomeEmpresa}</title>
       <style>
-        body { font-family: Arial, sans-serif; font-size: 11px; color: #1e293b; margin: 24px; }
-        h1 { font-size: 18px; margin-bottom: 4px; }
-        .sub { color: #64748b; font-size: 11px; margin-bottom: 4px; }
-        .escopo { color: #475569; font-size: 10px; margin-bottom: 14px; }
-        .resumo { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-        .resumo div { padding: 8px 16px; border-radius: 6px; }
-        .r1 { background: #fefce8; color: #ca8a04; font-weight: 600; }
-        .r2 { background: #fef2f2; color: #dc2626; font-weight: 600; }
-        .r3 { background: #f0fdf4; color: #16a34a; font-weight: 600; }
-        .r4 { background: #eef2ff; color: #4f46e5; font-weight: 700; }
-        table { width: 100%; border-collapse: collapse; }
-        th { background: #f8fafc; text-align: left; padding: 6px 8px; font-size: 10px;
-             text-transform: uppercase; letter-spacing: .05em; color: #64748b; border-bottom: 2px solid #e2e8f0; }
-        td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
-        .footer { margin-top: 16px; font-size: 10px; color: #94a3b8; }
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, 'Segoe UI', Arial, sans-serif; font-size: 11px; color: #0f172a; margin: 0; padding: 28px 32px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .head { display:flex; justify-content:space-between; align-items:flex-start; padding-bottom:16px; border-bottom:3px solid #4f46e5; margin-bottom:18px; }
+        .brand { display:flex; align-items:center; gap:10px; }
+        .logo { width:38px; height:38px; border-radius:10px; background:linear-gradient(135deg,#6366f1,#7c3aed); color:#fff; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:800; }
+        .brand h2 { margin:0; font-size:13px; color:#4f46e5; letter-spacing:.02em; }
+        .brand p { margin:2px 0 0; font-size:10px; color:#64748b; }
+        .head .rt { text-align:right; }
+        .head .rt h1 { margin:0; font-size:20px; }
+        .head .rt p { margin:3px 0 0; font-size:10px; color:#64748b; }
+        .scope { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; font-size:10px; color:#475569; margin-bottom:16px; }
+        .kpis { display:flex; gap:10px; margin-bottom:20px; }
+        .kpi { flex:1; border:1px solid #e2e8f0; border-radius:10px; padding:11px 13px; }
+        .kpi .lbl { font-size:9px; text-transform:uppercase; letter-spacing:.05em; color:#64748b; font-weight:700; }
+        .kpi .val { font-size:16px; font-weight:800; margin-top:3px; }
+        .kpi.k1 { border-left:4px solid #f59e0b; } .kpi.k1 .val { color:#b45309; }
+        .kpi.k2 { border-left:4px solid #ef4444; } .kpi.k2 .val { color:#b91c1c; }
+        .kpi.k3 { border-left:4px solid #22c55e; } .kpi.k3 .val { color:#15803d; }
+        .kpi.k4 { border-left:4px solid #6366f1; background:#eef2ff; } .kpi.k4 .val { color:#4338ca; }
+        h3 { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#334155; margin:22px 0 8px; padding-bottom:5px; border-bottom:1px solid #e2e8f0; }
+        table { width:100%; border-collapse:collapse; }
+        th { text-align:left; padding:7px 8px; font-size:9px; text-transform:uppercase; letter-spacing:.04em; color:#64748b; background:#f8fafc; border-bottom:1px solid #e2e8f0; }
+        td { padding:7px 8px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
+        tbody tr:nth-child(even) td { background:#fbfcfe; }
+        .num { text-align:right; font-weight:600; white-space:nowrap; }
+        .idx { color:#94a3b8; width:24px; }
+        .muted { color:#94a3b8; font-weight:400; }
+        .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:9px; font-weight:700; }
+        .bar { background:#eef2ff; border-radius:6px; height:10px; overflow:hidden; }
+        .bar span { display:block; height:10px; background:linear-gradient(90deg,#6366f1,#818cf8); border-radius:6px; }
+        tfoot td { font-weight:800; border-top:2px solid #e2e8f0; background:#f8fafc; }
+        .foot { margin-top:22px; padding-top:10px; border-top:1px solid #e2e8f0; font-size:9px; color:#94a3b8; display:flex; justify-content:space-between; }
+        @media print { body { padding:0; } }
       </style></head><body>
-      <h1>Contas a Pagar</h1>
-      <p class="sub">Gerado em ${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
-      <p class="escopo">${escopo}</p>
-      <div class="resumo">
-        <div class="r1">A pagar: ${formatCurrency(porStatus.pendente)}</div>
-        <div class="r2">Vencidas: ${formatCurrency(porStatus.vencido)}</div>
-        <div class="r3">Pagas: ${formatCurrency(porStatus.pago)}</div>
-        <div class="r4">Total: ${formatCurrency(totalGeral)}</div>
+      <div class="head">
+        <div class="brand">
+          <div class="logo">${(nomeEmpresa[0] ?? 'F').toUpperCase()}</div>
+          <div><h2>${nomeEmpresa}</h2><p>Gestao Financeira</p></div>
+        </div>
+        <div class="rt">
+          <h1>Contas a Pagar</h1>
+          <p>Gerado em ${geradoEm}</p>
+        </div>
       </div>
+
+      <div class="scope">${escopo} &nbsp;•&nbsp; ${lista.length} conta(s)</div>
+
+      <div class="kpis">
+        <div class="kpi k1"><div class="lbl">A Pagar</div><div class="val">${formatCurrency(porStatus.pendente)}</div></div>
+        <div class="kpi k2"><div class="lbl">Vencidas</div><div class="val">${formatCurrency(porStatus.vencido)}</div></div>
+        <div class="kpi k3"><div class="lbl">Pagas (${pctPago.toFixed(0)}%)</div><div class="val">${formatCurrency(porStatus.pago)}</div></div>
+        <div class="kpi k4"><div class="lbl">Total</div><div class="val">${formatCurrency(totalGeral)}</div></div>
+      </div>
+
+      <h3>Despesas por Centro de Custo</h3>
+      <table>
+        <thead><tr><th>Centro de Custo</th><th class="num">Valor</th><th class="num">% Total</th><th>Participacao</th></tr></thead>
+        <tbody>${linhasCentro}</tbody>
+        <tfoot><tr><td>Total</td><td class="num">${formatCurrency(totalGeral)}</td><td class="num">100%</td><td></td></tr></tfoot>
+      </table>
+
+      <h3>Detalhamento das Contas</h3>
       <table>
         <thead><tr>
-          <th>Descricao</th><th>Vencimento</th><th>Centro</th><th>Categoria</th><th>Status</th>
-          <th style="text-align:right">Valor</th>
+          <th class="idx">#</th><th>Descricao</th><th>Vencimento</th><th>Centro de Custo</th><th>Categoria</th>
+          <th class="num">Valor</th><th class="num">% Total</th><th>Status</th>
         </tr></thead>
-        <tbody>${linhas}</tbody>
+        <tbody>${linhasDet}</tbody>
+        <tfoot><tr><td></td><td colspan="4">Total geral (${lista.length} contas)</td><td class="num">${formatCurrency(totalGeral)}</td><td class="num">100%</td><td></td></tr></tfoot>
       </table>
-      <p class="footer">Total: ${lista.length} conta(s)</p>
+
+      <div class="foot">
+        <span>${nomeEmpresa} • Sistema Financeiro Fatima</span>
+        <span>Documento gerado automaticamente • ${geradoEm}</span>
+      </div>
       </body></html>`
 
     const win = window.open('', '_blank')
