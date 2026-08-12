@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import {
   Calendar, ChevronLeft, ChevronRight, AlertCircle,
-  Download, Link2, ExternalLink, CheckCircle, Clock, XCircle, RefreshCw, HandCoins
+  Download, Link2, ExternalLink, CheckCircle, Clock, XCircle, RefreshCw, HandCoins, Scale
 } from 'lucide-react'
 import type { Despesa, ContaReceber } from '@/lib/types'
 import {
@@ -154,6 +154,32 @@ export default function CalendarioPage() {
 
   const receberAberto = receber.filter(r => r.status === 'pendente' || r.status === 'vencido')
   const totalReceber  = receberAberto.reduce((s, r) => s + Number(r.valor), 0)
+  const recVencido = receber.filter(r => r.status === 'vencido').reduce((s, r) => s + Number(r.valor), 0)
+  const recRecebido = receber.filter(r => r.status === 'recebido').reduce((s, r) => s + Number(r.valor), 0)
+  const recRecebidoCount = receber.filter(r => r.status === 'recebido').length
+  const saldoPrevisto = totalReceber - (totalPendente + totalVencido)
+
+  // Cards do topo mudam conforme o filtro selecionado
+  type CardCal = { label: string; valor: number; sub: string; accent: string; text: string; bg: string; icon: 'clock' | 'alert' | 'check' | 'coins' | 'scale' }
+  const cardsCal: CardCal[] = filtro === 'receber'
+    ? [
+        { label: 'A Receber', valor: totalReceber, sub: `${receberAberto.length} conta(s)`, accent: 'border-l-blue-500', text: 'text-blue-600', bg: 'bg-blue-100', icon: 'coins' },
+        { label: 'Atrasado', valor: recVencido, sub: `${receber.filter(r => r.status === 'vencido').length} conta(s)`, accent: 'border-l-red-500', text: 'text-red-600', bg: 'bg-red-100', icon: 'alert' },
+        { label: 'Recebido este mes', valor: recRecebido, sub: `${recRecebidoCount} conta(s)`, accent: 'border-l-emerald-500', text: 'text-emerald-600', bg: 'bg-emerald-100', icon: 'check' },
+      ]
+    : filtro === 'pagar'
+    ? [
+        { label: 'A Pagar', valor: totalPendente, sub: `${pendentes.length} conta(s)`, accent: 'border-l-amber-400', text: 'text-amber-600', bg: 'bg-amber-100', icon: 'clock' },
+        { label: 'Vencidas', valor: totalVencido, sub: `${vencidas.length} conta(s)`, accent: 'border-l-red-500', text: 'text-red-600', bg: 'bg-red-100', icon: 'alert' },
+        { label: 'Pago este mes', valor: totalPago, sub: `${pagas.length} conta(s)`, accent: 'border-l-emerald-500', text: 'text-emerald-600', bg: 'bg-emerald-100', icon: 'check' },
+      ]
+    : [
+        { label: 'A Pagar', valor: totalPendente + totalVencido, sub: `${pendentes.length + vencidas.length} conta(s)`, accent: 'border-l-amber-400', text: 'text-amber-600', bg: 'bg-amber-100', icon: 'clock' },
+        { label: 'A Receber', valor: totalReceber, sub: `${receberAberto.length} conta(s)`, accent: 'border-l-blue-500', text: 'text-blue-600', bg: 'bg-blue-100', icon: 'coins' },
+        { label: 'Vencidas (pagar)', valor: totalVencido, sub: `${vencidas.length} conta(s)`, accent: 'border-l-red-500', text: 'text-red-600', bg: 'bg-red-100', icon: 'alert' },
+        { label: 'Saldo previsto', valor: saldoPrevisto, sub: 'receber − pagar', accent: saldoPrevisto >= 0 ? 'border-l-indigo-500' : 'border-l-orange-500', text: saldoPrevisto >= 0 ? 'text-indigo-600' : 'text-orange-600', bg: saldoPrevisto >= 0 ? 'bg-indigo-100' : 'bg-orange-100', icon: 'scale' },
+      ]
+  const iconCal = (k: CardCal['icon']) => k === 'clock' ? <Clock className="w-5 h-5" /> : k === 'alert' ? <AlertCircle className="w-5 h-5" /> : k === 'check' ? <CheckCircle className="w-5 h-5" /> : k === 'coins' ? <HandCoins className="w-5 h-5" /> : <Scale className="w-5 h-5" />
 
   // Proximos vencimentos unificados (pagar + receber), respeitando o filtro
   const proximosEventos: Evento[] = [
@@ -247,67 +273,24 @@ export default function CalendarioPage() {
         ))}
       </div>
 
-      {/* Cards resumo */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-        <Card className="border-l-4 border-l-amber-400 hover:shadow-md transition-shadow">
-          <CardContent className="py-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-slate-500 font-medium">A Pagar</p>
-                <p className="text-xl font-bold text-amber-600 mt-0.5">{formatCurrency(totalPendente)}</p>
-                <p className="text-xs text-slate-400">{pendentes.length} conta(s)</p>
+      {/* Cards resumo — mudam conforme o filtro */}
+      <div className={`grid gap-3 md:gap-4 ${cardsCal.length === 4 ? 'grid-cols-2 md:grid-cols-4' : 'grid-cols-1 sm:grid-cols-3'}`}>
+        {cardsCal.map(c => (
+          <Card key={c.label} className={`border-l-4 ${c.accent} hover:shadow-md transition-shadow`}>
+            <CardContent className="py-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-slate-500 font-medium">{c.label}</p>
+                  <p className={`text-xl font-bold mt-0.5 ${c.text}`}>{formatCurrency(c.valor)}</p>
+                  <p className="text-xs text-slate-400">{c.sub}</p>
+                </div>
+                <div className={`w-10 h-10 ${c.bg} rounded-xl flex items-center justify-center ${c.text}`}>
+                  {iconCal(c.icon)}
+                </div>
               </div>
-              <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
-                <Clock className="w-5 h-5 text-amber-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className={`border-l-4 border-l-red-500 hover:shadow-md transition-shadow ${vencidas.length > 0 ? 'ring-1 ring-red-200' : ''}`}>
-          <CardContent className="py-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-slate-500 font-medium">Vencidas</p>
-                <p className="text-xl font-bold text-red-600 mt-0.5">{formatCurrency(totalVencido)}</p>
-                <p className="text-xs text-slate-400">{vencidas.length} conta(s)</p>
-              </div>
-              <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center">
-                <AlertCircle className="w-5 h-5 text-red-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-l-4 border-l-emerald-500 hover:shadow-md transition-shadow">
-          <CardContent className="py-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-slate-500 font-medium">Pago este mes</p>
-                <p className="text-xl font-bold text-emerald-600 mt-0.5">{formatCurrency(totalPago)}</p>
-                <p className="text-xs text-slate-400">{pagas.length} conta(s)</p>
-              </div>
-              <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
-                <CheckCircle className="w-5 h-5 text-emerald-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow">
-          <CardContent className="py-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-slate-500 font-medium">A Receber</p>
-                <p className="text-xl font-bold text-blue-600 mt-0.5">{formatCurrency(totalReceber)}</p>
-                <p className="text-xs text-slate-400">{receberAberto.length} conta(s)</p>
-              </div>
-              <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
-                <HandCoins className="w-5 h-5 text-blue-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
