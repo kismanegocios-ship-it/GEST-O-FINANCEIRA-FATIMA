@@ -9,9 +9,9 @@ import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import {
   Calendar, ChevronLeft, ChevronRight, AlertCircle,
-  Download, Link2, ExternalLink, CheckCircle, Clock, XCircle, RefreshCw
+  Download, Link2, ExternalLink, CheckCircle, Clock, XCircle, RefreshCw, HandCoins
 } from 'lucide-react'
-import type { Despesa } from '@/lib/types'
+import type { Despesa, ContaReceber } from '@/lib/types'
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay,
   addMonths, subMonths, isToday, isBefore, parseISO, getDay, isThisMonth
@@ -66,10 +66,13 @@ function gerarICS(despesas: Despesa[]): string {
 export default function CalendarioPage() {
   const [mes, setMes] = useState(new Date())
   const [despesas, setDespesas] = useState<Despesa[]>([])
+  const [receber, setReceber] = useState<ContaReceber[]>([])
   const [proximas, setProximas] = useState<Despesa[]>([])
+  const [proximasRec, setProximasRec] = useState<ContaReceber[]>([])
   const [loading, setLoading] = useState(true)
   const [diaSelecionado, setDiaSelecionado] = useState<Date | null>(null)
   const [baseUrl, setBaseUrl] = useState('')
+  const [filtro, setFiltro] = useState<'todos' | 'pagar' | 'receber'>('todos')
   const { empresaId } = useEmpresa()
 
   useEffect(() => { setBaseUrl(window.location.origin) }, [])
@@ -90,7 +93,10 @@ export default function CalendarioPage() {
     const fim = format(endOfMonth(mes), 'yyyy-MM-dd')
     // Proximos vencimentos: atrasados + pendentes ate 3 meses a frente
     const horizonte = format(endOfMonth(addMonths(new Date(), 3)), 'yyyy-MM-dd')
-    const [mesRes, proxRes] = await Promise.all([
+    // Auto-vencimento tambem nas contas a receber
+    await esc(supabase.from('contas_receber').update({ status: 'vencido' }).eq('status', 'pendente').lt('data_vencimento', hoje))
+
+    const [mesRes, proxRes, mesRec, proxRec] = await Promise.all([
       esc(supabase.from('despesas')
         .select('*, categorias(*), centros_custo(*)')
         .gte('data_vencimento', ini).lte('data_vencimento', fim)
@@ -100,9 +106,20 @@ export default function CalendarioPage() {
         .in('status', ['pendente', 'vencido'])
         .lte('data_vencimento', horizonte)
         .order('data_vencimento')),
+      esc(supabase.from('contas_receber')
+        .select('*, categorias(*), centros_custo(*)')
+        .gte('data_vencimento', ini).lte('data_vencimento', fim)
+        .order('data_vencimento')),
+      esc(supabase.from('contas_receber')
+        .select('*, categorias(*), centros_custo(*)')
+        .in('status', ['pendente', 'vencido'])
+        .lte('data_vencimento', horizonte)
+        .order('data_vencimento')),
     ])
     setDespesas((mesRes.data ?? []) as Despesa[])
     setProximas((proxRes.data ?? []) as Despesa[])
+    setReceber((mesRec.data ?? []) as ContaReceber[])
+    setProximasRec((proxRec.data ?? []) as ContaReceber[])
     setLoading(false)
   }, [mes, empresaId])
 
@@ -110,7 +127,22 @@ export default function CalendarioPage() {
 
   const diasDoMes = eachDayOfInterval({ start: startOfMonth(mes), end: endOfMonth(mes) })
   const offset = getDay(startOfMonth(mes))
-  const despDia = (d: Date) => despesas.filter(dp => isSameDay(parseISO(dp.data_vencimento), d))
+
+  // Eventos unificados do mes (pagar + receber), respeitando o filtro
+  type Evento = { id: string; kind: 'pagar' | 'receber'; descricao: string; valor: number; data: string; status: string }
+  const eventosMes: Evento[] = [
+    ...(filtro !== 'receber' ? despesas.map(d => ({ id: d.id, kind: 'pagar' as const, descricao: d.descricao, valor: Number(d.valor), data: d.data_vencimento, status: d.status })) : []),
+    ...(filtro !== 'pagar' ? receber.map(r => ({ id: r.id, kind: 'receber' as const, descricao: r.descricao, valor: Number(r.valor), data: r.data_vencimento, status: r.status })) : []),
+  ]
+  const eventosDia = (d: Date) => eventosMes.filter(e => isSameDay(parseISO(e.data), d))
+
+  // Cor/estilo por evento: pagar usa status, receber = azul
+  const eventoLight = (e: Evento) =>
+    e.kind === 'receber'
+      ? (e.status === 'recebido' ? 'bg-blue-50 border-blue-200 text-blue-500' : 'bg-blue-50 border-blue-200 text-blue-700')
+      : (STATUS_CONFIG[e.status as keyof typeof STATUS_CONFIG]?.light ?? 'bg-slate-50 text-slate-600 border-slate-200')
+  const eventoDot = (e: Evento) =>
+    e.kind === 'receber' ? 'bg-blue-500' : (STATUS_CONFIG[e.status as keyof typeof STATUS_CONFIG]?.dot ?? 'bg-slate-400')
 
   const pendentes = despesas.filter(d => d.status === 'pendente')
   const vencidas  = despesas.filter(d => d.status === 'vencido')
@@ -119,6 +151,15 @@ export default function CalendarioPage() {
   const totalPendente = pendentes.reduce((s, d) => s + Number(d.valor), 0)
   const totalVencido  = vencidas.reduce((s, d) => s + Number(d.valor), 0)
   const totalPago     = pagas.reduce((s, d) => s + Number(d.valor), 0)
+
+  const receberAberto = receber.filter(r => r.status === 'pendente' || r.status === 'vencido')
+  const totalReceber  = receberAberto.reduce((s, r) => s + Number(r.valor), 0)
+
+  // Proximos vencimentos unificados (pagar + receber), respeitando o filtro
+  const proximosEventos: Evento[] = [
+    ...(filtro !== 'receber' ? proximas.map(d => ({ id: d.id, kind: 'pagar' as const, descricao: d.descricao, valor: Number(d.valor), data: d.data_vencimento, status: d.status })) : []),
+    ...(filtro !== 'pagar' ? proximasRec.map(r => ({ id: r.id, kind: 'receber' as const, descricao: r.descricao, valor: Number(r.valor), data: r.data_vencimento, status: r.status })) : []),
+  ].sort((a, b) => (a.data < b.data ? -1 : 1))
 
   const exportarICS = () => {
     // Exporta TODOS os vencimentos futuros (atrasados + ate 3 meses), nao so o mes na tela
@@ -140,7 +181,7 @@ export default function CalendarioPage() {
     toast.success('URL copiada! Cole no Google Agenda > Outros calendarios > Por URL')
   }
 
-  const despSelecionadas = diaSelecionado ? despDia(diaSelecionado) : []
+  const despSelecionadas = diaSelecionado ? eventosDia(diaSelecionado) : []
 
   return (
     <div className="space-y-5">
@@ -192,8 +233,22 @@ export default function CalendarioPage() {
         </div>
       </div>
 
+      {/* Filtro Tudo / A Pagar / A Receber */}
+      <div className="flex gap-1.5">
+        {([['todos', 'Tudo'], ['pagar', 'A Pagar'], ['receber', 'A Receber']] as const).map(([k, lbl]) => (
+          <button key={k} onClick={() => setFiltro(k)}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+              filtro === k
+                ? (k === 'receber' ? 'bg-blue-600 text-white' : 'bg-indigo-600 text-white')
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+
       {/* Cards resumo */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
         <Card className="border-l-4 border-l-amber-400 hover:shadow-md transition-shadow">
           <CardContent className="py-4">
             <div className="flex items-center justify-between">
@@ -234,6 +289,21 @@ export default function CalendarioPage() {
               </div>
               <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
                 <CheckCircle className="w-5 h-5 text-emerald-600" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow">
+          <CardContent className="py-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-slate-500 font-medium">A Receber</p>
+                <p className="text-xl font-bold text-blue-600 mt-0.5">{formatCurrency(totalReceber)}</p>
+                <p className="text-xs text-slate-400">{receberAberto.length} conta(s)</p>
+              </div>
+              <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
+                <HandCoins className="w-5 h-5 text-blue-600" />
               </div>
             </div>
           </CardContent>
@@ -286,12 +356,9 @@ export default function CalendarioPage() {
               <div className="grid grid-cols-7 gap-1">
                 {Array(offset).fill(null).map((_, i) => <div key={`off-${i}`} />)}
                 {diasDoMes.map(dia => {
-                  const desp = despDia(dia)
+                  const desp = eventosDia(dia)
                   const selected = diaSelecionado && isSameDay(dia, diaSelecionado)
                   const hoje = isToday(dia)
-                  const temVencido = desp.some(d => d.status === 'vencido')
-                  const temPendente = desp.some(d => d.status === 'pendente')
-                  const tudo_pago = desp.length > 0 && desp.every(d => d.status === 'pago')
                   const passado = isBefore(dia, new Date()) && !hoje
 
                   return (
@@ -319,18 +386,17 @@ export default function CalendarioPage() {
                         {format(dia, 'd')}
                       </span>
 
-                      {/* Despesas visíveis */}
+                      {/* Eventos visíveis (pagar/receber) */}
                       <div className="space-y-0.5 w-full overflow-hidden">
-                        {desp.slice(0, 2).map(d => (
+                        {desp.slice(0, 2).map(e => (
                           <div
-                            key={d.id}
+                            key={e.kind + e.id}
                             className={`
                               text-[10px] font-medium px-1.5 py-0.5 rounded-md truncate border leading-tight
-                              ${selected ? 'bg-white/20 text-white border-white/30'
-                                : STATUS_CONFIG[d.status as keyof typeof STATUS_CONFIG]?.light ?? 'bg-slate-50 text-slate-600 border-slate-200'}
+                              ${selected ? 'bg-white/20 text-white border-white/30' : eventoLight(e)}
                             `}
                           >
-                            {d.descricao.length > 10 ? d.descricao.slice(0, 10) + '…' : d.descricao}
+                            {e.kind === 'receber' ? '↓ ' : ''}{e.descricao.length > 9 ? e.descricao.slice(0, 9) + '…' : e.descricao}
                           </div>
                         ))}
                         {desp.length > 2 && (
@@ -346,12 +412,18 @@ export default function CalendarioPage() {
 
               {/* Legenda */}
               <div className="flex flex-wrap gap-3 mt-4 pt-3 border-t border-slate-100">
-                {Object.entries(STATUS_CONFIG).map(([key, cfg]) => (
+                {filtro !== 'receber' && Object.entries(STATUS_CONFIG).map(([key, cfg]) => (
                   <div key={key} className="flex items-center gap-1.5">
                     <div className={`w-2.5 h-2.5 rounded-full ${cfg.dot}`} />
-                    <span className="text-xs text-slate-500">{cfg.label}</span>
+                    <span className="text-xs text-slate-500">{cfg.label} (pagar)</span>
                   </div>
                 ))}
+                {filtro !== 'pagar' && (
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+                    <span className="text-xs text-slate-500">A Receber</span>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -383,29 +455,27 @@ export default function CalendarioPage() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {despSelecionadas.map(d => {
-                      const cfg = STATUS_CONFIG[d.status as keyof typeof STATUS_CONFIG]
+                    {despSelecionadas.map(e => {
+                      const label = e.kind === 'receber'
+                        ? (e.status === 'recebido' ? 'Recebido' : e.status === 'vencido' ? 'A receber (atrasado)' : 'A receber')
+                        : (STATUS_CONFIG[e.status as keyof typeof STATUS_CONFIG]?.label ?? e.status)
                       return (
-                        <div key={d.id} className={`border rounded-xl p-3 ${cfg?.light}`}>
+                        <div key={e.kind + e.id} className={`border rounded-xl p-3 ${eventoLight(e)}`}>
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex-1 min-w-0">
-                              <p className="font-semibold text-sm leading-tight truncate">{d.descricao}</p>
-                              <p className="text-xl font-bold mt-1">{formatCurrency(Number(d.valor))}</p>
-                              {(d as any).categorias && (
-                                <p className="text-xs opacity-70 mt-0.5">{(d as any).categorias.nome}</p>
-                              )}
+                              <p className="text-[10px] font-bold uppercase tracking-wide opacity-70">{e.kind === 'receber' ? '↓ Receber' : '↑ Pagar'}</p>
+                              <p className="font-semibold text-sm leading-tight truncate">{e.descricao}</p>
+                              <p className="text-xl font-bold mt-1">{formatCurrency(Number(e.valor))}</p>
                             </div>
-                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full bg-white/60 flex-shrink-0`}>
-                              {cfg?.label}
-                            </span>
+                            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/60 flex-shrink-0">{label}</span>
                           </div>
-                          {d.status === 'pendente' && (
+                          {(e.status === 'pendente' || e.status === 'vencido') && (
                             <div className="flex gap-2 mt-3 pt-2 border-t border-current/10">
                               <a
                                 href={googleCalendarLink({
-                                  title: `Pagar: ${d.descricao}`,
-                                  date: d.data_vencimento,
-                                  description: `Valor: ${formatCurrency(Number(d.valor))}`,
+                                  title: `${e.kind === 'receber' ? 'Receber' : 'Pagar'}: ${e.descricao}`,
+                                  date: e.data,
+                                  description: `Valor: ${formatCurrency(Number(e.valor))}`,
                                 })}
                                 target="_blank"
                                 rel="noopener noreferrer"
@@ -491,41 +561,42 @@ export default function CalendarioPage() {
               </div>
             </CardHeader>
             <CardContent className="pt-0 max-h-80 overflow-y-auto scrollbar-thin px-3">
-              {proximas.length === 0 ? (
+              {proximosEventos.length === 0 ? (
                 <div className="text-center py-4">
                   <CheckCircle className="w-8 h-8 text-emerald-300 mx-auto mb-2" />
                   <p className="text-slate-400 text-sm">Nada a vencer!</p>
                 </div>
               ) : (
                 (() => {
-                  const grupos = new Map<string, Despesa[]>()
-                  for (const d of proximas) {
-                    const k = (d.data_vencimento ?? '').slice(0, 7)
-                    const arr = grupos.get(k); if (arr) arr.push(d); else grupos.set(k, [d])
+                  const grupos = new Map<string, Evento[]>()
+                  for (const e of proximosEventos) {
+                    const k = (e.data ?? '').slice(0, 7)
+                    const arr = grupos.get(k); if (arr) arr.push(e); else grupos.set(k, [e])
                   }
                   return Array.from(grupos.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([k, itens]) => {
                     const [ano, m] = k.split('-').map(Number)
-                    const total = itens.reduce((s, d) => s + Number(d.valor), 0)
+                    const totPagar = itens.filter(e => e.kind === 'pagar').reduce((s, e) => s + e.valor, 0)
+                    const totReceber = itens.filter(e => e.kind === 'receber').reduce((s, e) => s + e.valor, 0)
                     return (
                       <div key={k} className="mb-2">
                         <div className="flex items-center justify-between px-1 py-1 sticky top-0 bg-white">
                           <span className="text-[11px] font-bold text-slate-500 capitalize">{format(new Date(ano, m - 1, 1), "MMMM/yyyy", { locale: ptBR })}</span>
-                          <span className="text-[11px] font-bold text-slate-700">{formatCurrency(total)}</span>
+                          <span className="text-[11px] font-bold flex gap-2">
+                            {totPagar > 0 && <span className="text-red-500">-{formatCurrency(totPagar)}</span>}
+                            {totReceber > 0 && <span className="text-blue-600">+{formatCurrency(totReceber)}</span>}
+                          </span>
                         </div>
                         <div className="space-y-1">
-                          {itens.map(d => {
-                            const cfg = STATUS_CONFIG[d.status as keyof typeof STATUS_CONFIG]
-                            return (
-                              <div key={d.id} className="flex items-center gap-2.5 p-2 rounded-xl hover:bg-slate-50 transition-colors">
-                                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg?.dot}`} />
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-xs font-semibold text-slate-700 truncate leading-tight">{d.descricao}</p>
-                                  <p className="text-xs text-slate-400">{formatDate(d.data_vencimento)}{d.status === 'vencido' ? ' · vencida' : ''}</p>
-                                </div>
-                                <span className="text-xs font-bold text-slate-700 flex-shrink-0">{formatCurrency(Number(d.valor))}</span>
+                          {itens.map(e => (
+                            <div key={e.kind + e.id} className="flex items-center gap-2.5 p-2 rounded-xl hover:bg-slate-50 transition-colors">
+                              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${eventoDot(e)}`} />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-semibold text-slate-700 truncate leading-tight">{e.kind === 'receber' ? '↓ ' : ''}{e.descricao}</p>
+                                <p className="text-xs text-slate-400">{formatDate(e.data)}{e.status === 'vencido' ? (e.kind === 'receber' ? ' · atrasado' : ' · vencida') : ''}</p>
                               </div>
-                            )
-                          })}
+                              <span className={`text-xs font-bold flex-shrink-0 ${e.kind === 'receber' ? 'text-blue-600' : 'text-slate-700'}`}>{formatCurrency(e.valor)}</span>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )
