@@ -61,6 +61,7 @@ export default function ConciliacaoPage() {
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [centros, setCentros] = useState<CentroCusto[]>([])
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set())
+  const [lancSel, setLancSel] = useState<Set<string>>(new Set())
   const [mesesAbertos, setMesesAbertos] = useState<Set<string> | null>(null)
   const [verificando, setVerificando] = useState(false)
   const [modoConciliar, setModoConciliar] = useState<'criar' | 'vincular'>('criar')
@@ -877,6 +878,49 @@ export default function ConciliacaoPage() {
     load()
   }
 
+  // Conciliar manualmente um lancamento (sem extrato correspondente)
+  const conciliarLancamento = async (id: string) => {
+    await supabase.from('lancamentos').update({ conciliado: true }).eq('id', id)
+    toast.success('Marcado como conciliado')
+    load()
+  }
+
+  // Excluir lancamento (do sistema/caixa) direto da conciliacao
+  const excluirLancamento = async (l: Lancamento) => {
+    if (!confirm(`Excluir o lancamento "${l.descricao}"?\n\n${l.tipo === 'entrada' ? '+' : '-'}${formatCurrency(Number(l.valor))} · ${formatDate(l.data)}\n\nEle sai do caixa (Lancamentos). Se veio de uma conta paga, a conta continua marcada como paga.`)) return
+    const { error } = await supabase.from('lancamentos').delete().eq('id', l.id)
+    if (error) { toast.error('Erro ao excluir: ' + error.message); return }
+    setLancSel(prev => { const n = new Set(prev); n.delete(l.id); return n })
+    toast.success('Lancamento excluido')
+    load()
+  }
+
+  const toggleLancSel = (id: string) => setLancSel(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  const toggleTodosLanc = () => {
+    const ids = lancamentos.map(l => l.id)
+    const todos = ids.length > 0 && ids.every(id => lancSel.has(id))
+    setLancSel(todos ? new Set() : new Set(ids))
+  }
+  const excluirLancsSelecionados = async () => {
+    const ids = Array.from(lancSel)
+    if (ids.length === 0) return
+    const itens = lancamentos.filter(l => lancSel.has(l.id))
+    const previa = itens.slice(0, 8).map(l => `• ${l.descricao} (${l.tipo === 'entrada' ? '+' : '-'}${formatCurrency(Number(l.valor))})`).join('\n')
+    if (!confirm(`Excluir ${ids.length} lancamento(s) do caixa?\n\n${previa}${itens.length > 8 ? `\n... e mais ${itens.length - 8}` : ''}\n\nNao pode ser desfeito.`)) return
+    const { error } = await supabase.from('lancamentos').delete().in('id', ids)
+    if (error) { toast.error('Erro ao excluir: ' + error.message); return }
+    toast.success(`${ids.length} lancamento(s) excluido(s)`)
+    setLancSel(new Set()); load()
+  }
+  const conciliarLancsSelecionados = async () => {
+    const ids = Array.from(lancSel)
+    if (ids.length === 0) return
+    const { error } = await supabase.from('lancamentos').update({ conciliado: true }).in('id', ids)
+    if (error) { toast.error('Erro: ' + error.message); return }
+    toast.success(`${ids.length} conciliado(s)`)
+    setLancSel(new Set()); load()
+  }
+
   const estornar = async (e: ExtratoManual) => {
     if (!confirm('Estornar esta conciliacao? O extrato voltara para pendente e o lancamento vinculado voltara para nao conciliado.')) return
     await supabase.from('extrato_manual').update({ conciliado: false, lancamento_id: null }).eq('id', e.id)
@@ -1318,7 +1362,7 @@ export default function ConciliacaoPage() {
       {lancamentos.length > 0 && (
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <FileSpreadsheet className="w-4 h-4 text-blue-500" />
                 <CardTitle>Lancamentos sem extrato bancario</CardTitle>
@@ -1326,6 +1370,16 @@ export default function ConciliacaoPage() {
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">Registros do sistema ainda nao conciliados com o banco</p>
             </div>
+            {lancSel.size > 0 && (
+              <div className="mt-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 flex items-center justify-between flex-wrap gap-2">
+                <p className="text-sm font-medium text-slate-700">{lancSel.size} selecionado(s)</p>
+                <div className="flex gap-2">
+                  <button onClick={() => setLancSel(new Set())} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-500 hover:bg-slate-100">Limpar</button>
+                  <button onClick={conciliarLancsSelecionados} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-colors"><CheckCircle size={12} /> Conciliar</button>
+                  <button onClick={excluirLancsSelecionados} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors"><Trash2 size={12} /> Excluir</button>
+                </div>
+              </div>
+            )}
           </CardHeader>
 
           {/* Desktop */}
@@ -1333,19 +1387,27 @@ export default function ConciliacaoPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100">
-                  <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 uppercase">Descricao</th>
+                  <th className="px-4 py-3 w-10">
+                    <input type="checkbox" className="w-4 h-4 accent-indigo-600 cursor-pointer align-middle"
+                      checked={lancamentos.length > 0 && lancamentos.every(l => lancSel.has(l.id))}
+                      onChange={toggleTodosLanc} title="Selecionar todos" />
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Descricao</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Data</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Tipo</th>
                   <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Valor</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Forma</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Conta</th>
-                  <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase text-center">Acao</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase text-center">Acoes</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {lancamentos.map(l => (
-                  <tr key={l.id} className="hover:bg-blue-50/40 transition-colors">
-                    <td className="px-6 py-3">
+                  <tr key={l.id} className={`hover:bg-blue-50/40 transition-colors ${lancSel.has(l.id) ? 'bg-indigo-50/40' : ''}`}>
+                    <td className="px-4 py-3">
+                      <input type="checkbox" className="w-4 h-4 accent-indigo-600 cursor-pointer align-middle" checked={lancSel.has(l.id)} onChange={() => toggleLancSel(l.id)} />
+                    </td>
+                    <td className="px-4 py-3">
                       <p className="font-semibold text-slate-800">{l.descricao}</p>
                       {l.observacoes && <p className="text-xs text-slate-400 italic mt-0.5">{l.observacoes}</p>}
                     </td>
@@ -1360,18 +1422,19 @@ export default function ConciliacaoPage() {
                     </td>
                     <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">{l.forma_pagamento ?? '—'}</td>
                     <td className="px-4 py-3 text-slate-500 text-xs">{(l as any).contas_bancarias?.nome ?? '—'}</td>
-                    <td className="px-4 py-3 text-center">
-                      <button
-                        onClick={async () => {
-                          await supabase.from('lancamentos').update({ conciliado: true }).eq('id', l.id)
-                          toast.success('Marcado como conciliado')
-                          load()
-                        }}
-                        className="px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-medium transition-colors flex items-center gap-1 mx-auto"
-                        title="Marcar como conciliado manualmente"
-                      >
-                        <CheckCircle size={12} /> Conciliar
-                      </button>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={() => conciliarLancamento(l.id)}
+                          className="px-2.5 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-medium transition-colors flex items-center gap-1"
+                          title="Marcar como conciliado manualmente">
+                          <CheckCircle size={12} /> Conciliar
+                        </button>
+                        <button onClick={() => excluirLancamento(l)}
+                          className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors"
+                          title="Excluir lancamento do caixa">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1382,8 +1445,9 @@ export default function ConciliacaoPage() {
           {/* Mobile */}
           <CardList>
             {lancamentos.map(l => (
-              <MobileCard key={l.id}>
-                <div className="flex items-start justify-between gap-2 mb-2">
+              <MobileCard key={l.id} className={lancSel.has(l.id) ? 'bg-indigo-50/40' : ''}>
+                <div className="flex items-start gap-2 mb-2">
+                  <input type="checkbox" className="w-4 h-4 accent-indigo-600 cursor-pointer mt-1 flex-shrink-0" checked={lancSel.has(l.id)} onChange={() => toggleLancSel(l.id)} />
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-slate-800 text-sm truncate">{l.descricao}</p>
                     <p className="text-xs text-slate-400 mt-0.5">{formatDate(l.data)}</p>
@@ -1399,16 +1463,14 @@ export default function ConciliacaoPage() {
                   <Badge variant={l.tipo === 'entrada' ? 'success' : 'danger'}>
                     {l.tipo === 'entrada' ? '↑ Entrada' : '↓ Saida'}
                   </Badge>
-                  <button
-                    onClick={async () => {
-                      await supabase.from('lancamentos').update({ conciliado: true }).eq('id', l.id)
-                      toast.success('Marcado como conciliado')
-                      load()
-                    }}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-600 text-xs font-medium"
-                  >
-                    <CheckCircle size={12} /> Conciliar
-                  </button>
+                  <div className="flex gap-1.5">
+                    <button onClick={() => conciliarLancamento(l.id)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-600 text-xs font-medium">
+                      <CheckCircle size={12} /> Conciliar
+                    </button>
+                    <button onClick={() => excluirLancamento(l)} className="p-1.5 rounded-lg bg-red-50 text-red-400 hover:text-red-600">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 </div>
               </MobileCard>
             ))}
