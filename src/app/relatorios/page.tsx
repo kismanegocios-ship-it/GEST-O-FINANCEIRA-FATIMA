@@ -5,8 +5,8 @@ import { supabase } from '@/lib/supabase'
 import { formatCurrency } from '@/lib/utils'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  Cell, Legend, AreaChart, Area
+  Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  Legend, ComposedChart, Line
 } from 'recharts'
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -247,48 +247,23 @@ export default function RelatoriosPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Evolucao 12 meses - Entradas vs Saidas</CardTitle>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <CardTitle>Evolucao 12 meses</CardTitle>
+            <span className="text-xs text-slate-400">Barras = entradas/saidas · Linha = resultado (saldo)</span>
+          </div>
         </CardHeader>
         <CardContent>
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={meses}>
-              <defs>
-                <linearGradient id="gradEntradas" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#22c55e" stopOpacity={0.15} />
-                  <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="gradSaidas" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#ef4444" stopOpacity={0.15} />
-                  <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+          <ResponsiveContainer width="100%" height={300}>
+            <ComposedChart data={meses} barGap={2} barCategoryGap="24%">
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
               <XAxis dataKey="mesLabel" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={(v: any) => `R$${(Number(v)/1000).toFixed(0)}k`} />
-              <Tooltip formatter={(v: any) => formatCurrency(Number(v))} />
+              <Tooltip formatter={(v: any) => formatCurrency(Number(v))} cursor={{ fill: '#f8fafc' }} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Area type="monotone" dataKey="entradas" name="Entradas" stroke="#22c55e" fill="url(#gradEntradas)" strokeWidth={2} />
-              <Area type="monotone" dataKey="saidas" name="Saidas" stroke="#ef4444" fill="url(#gradSaidas)" strokeWidth={2} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><CardTitle>Saldo Mensal</CardTitle></CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={meses}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="mesLabel" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={(v: any) => `R$${(Number(v)/1000).toFixed(0)}k`} />
-              <Tooltip formatter={(v: any) => formatCurrency(Number(v))} />
-              <Bar dataKey="saldo" name="Saldo" radius={[6,6,0,0]}>
-                {meses.map((m, i) => (
-                  <Cell key={i} fill={m.saldo >= 0 ? '#6366f1' : '#f97316'} />
-                ))}
-              </Bar>
-            </BarChart>
+              <Bar dataKey="entradas" name="Entradas" fill="#22c55e" radius={[4,4,0,0]} maxBarSize={26} />
+              <Bar dataKey="saidas" name="Saidas" fill="#ef4444" radius={[4,4,0,0]} maxBarSize={26} />
+              <Line type="monotone" dataKey="saldo" name="Resultado" stroke="#4f46e5" strokeWidth={2.5} dot={{ r: 3, fill: '#4f46e5' }} activeDot={{ r: 5 }} />
+            </ComposedChart>
           </ResponsiveContainer>
         </CardContent>
       </Card>
