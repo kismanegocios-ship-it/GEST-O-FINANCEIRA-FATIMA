@@ -6,7 +6,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   TrendingUp, TrendingDown, DollarSign, AlertCircle,
-  Calendar, ArrowRight
+  Calendar, ArrowRight, Wallet, ArrowUpRight, ArrowDownRight, Building2
 } from 'lucide-react'
 import Link from 'next/link'
 import {
@@ -16,6 +16,7 @@ import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import type { Lancamento, Despesa } from '@/lib/types'
 import { useEmpresa } from '@/lib/empresa'
+import { fetchAllRows } from '@/lib/fetch-all'
 
 const COLORS = ['#6366f1', '#f472b6', '#22c55e', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6']
 
@@ -34,6 +35,12 @@ export default function Dashboard() {
   const [proximasVencendo, setProximasVencendo] = useState<Despesa[]>([])
   const [graficoMensal, setGraficoMensal] = useState<ResumoMes[]>([])
   const [graficoCategorias, setGraficoCategorias] = useState<{ nome: string; valor: number }[]>([])
+  const [saldoCaixa, setSaldoCaixa] = useState(0)
+  const [saldosBanco, setSaldosBanco] = useState<{ nome: string; saldo: number }[]>([])
+  const [aPagar, setAPagar] = useState(0)
+  const [aReceber, setAReceber] = useState(0)
+  const [entradasPrev, setEntradasPrev] = useState(0)
+  const [saidasPrev, setSaidasPrev] = useState(0)
   const [loading, setLoading] = useState(true)
   const { empresaId } = useEmpresa()
 
@@ -68,9 +75,39 @@ export default function Dashboard() {
       const despesas = desp.data ?? []
       setDespesasPendentes(despesas.filter((d: any) => d.status === 'pendente').length)
       setDespesasVencidas(despesas.filter((d: any) => d.status === 'vencido').length)
+      setAPagar(despesas.reduce((s: number, d: any) => s + Number(d.valor), 0))
 
       setUltimosLancamentos((lancRecentes.data ?? []) as Lancamento[])
       setProximasVencendo((despVencendo.data ?? []) as Despesa[])
+
+      // A receber (pendente + vencido)
+      const { data: recData } = await esc(supabase.from('contas_receber').select('valor').in('status', ['pendente', 'vencido']))
+      setAReceber((recData ?? []).reduce((s: number, r: any) => s + Number(r.valor), 0))
+
+      // Saldo em caixa REAL: saldo inicial das contas + todos os lancamentos (paginado)
+      const [contasData, todosLancs] = await Promise.all([
+        esc(supabase.from('contas_bancarias').select('*').eq('ativo', true).order('nome')),
+        fetchAllRows<{ valor: number; tipo: string; conta_bancaria_id: string | null }>(() =>
+          esc(supabase.from('lancamentos').select('valor, tipo, conta_bancaria_id'))),
+      ])
+      const contas = (contasData.data ?? []) as any[]
+      const deltaPorConta: Record<string, number> = {}
+      let deltaTotal = 0
+      for (const l of todosLancs) {
+        const d = l.tipo === 'entrada' ? Number(l.valor) : -Number(l.valor)
+        deltaTotal += d
+        if (l.conta_bancaria_id) deltaPorConta[l.conta_bancaria_id] = (deltaPorConta[l.conta_bancaria_id] ?? 0) + d
+      }
+      const saldoInicialTotal = contas.reduce((s, c) => s + Number(c.saldo_inicial), 0)
+      setSaldoCaixa(saldoInicialTotal + deltaTotal)
+      setSaldosBanco(contas.map(c => ({ nome: c.nome, saldo: Number(c.saldo_inicial) + (deltaPorConta[c.id] ?? 0) })).sort((a, b) => b.saldo - a.saldo))
+
+      // Mes anterior (para variacao %)
+      const mAnt = subMonths(hoje, 1)
+      const { data: lancPrev } = await esc(supabase.from('lancamentos').select('tipo, valor')
+        .gte('data', format(startOfMonth(mAnt), 'yyyy-MM-dd')).lte('data', format(endOfMonth(mAnt), 'yyyy-MM-dd')))
+      setEntradasPrev((lancPrev ?? []).filter((l: any) => l.tipo === 'entrada').reduce((s: number, l: any) => s + Number(l.valor), 0))
+      setSaidasPrev((lancPrev ?? []).filter((l: any) => l.tipo === 'saida').reduce((s: number, l: any) => s + Number(l.valor), 0))
 
       const meses: ResumoMes[] = []
       for (let i = 5; i >= 0; i--) {
@@ -119,68 +156,93 @@ export default function Dashboard() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="border-l-4 border-l-green-500">
-          <CardContent className="py-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-slate-500 font-medium">Entradas do Mes</p>
-                <p className="text-2xl font-bold text-green-600 mt-1">{formatCurrency(totalEntradas)}</p>
-              </div>
-              <div className="w-10 h-10 bg-green-100 rounded-xl flex items-center justify-center">
-                <TrendingUp className="w-5 h-5 text-green-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Hero: Saldo em caixa + Entradas/Saidas/Resultado do mes */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Saldo em caixa (hero) */}
+        <div className="lg:col-span-1 rounded-2xl p-5 bg-gradient-to-br from-indigo-600 to-purple-700 text-white shadow-lg flex flex-col justify-between">
+          <div className="flex items-center gap-2 text-indigo-200 text-xs font-medium">
+            <Wallet size={15} /> SALDO EM CAIXA
+          </div>
+          <div>
+            <p className={`text-3xl font-extrabold mt-2 ${saldoCaixa < 0 ? 'text-red-200' : ''}`}>{formatCurrency(saldoCaixa)}</p>
+            <p className="text-indigo-200 text-xs mt-1">Saldo inicial + todas as movimentacoes</p>
+          </div>
+          <div className="flex items-center gap-4 mt-4 pt-3 border-t border-white/20 text-xs">
+            <div><span className="text-indigo-200">A pagar</span><p className="font-bold text-sm">{formatCurrency(aPagar)}</p></div>
+            <div><span className="text-indigo-200">A receber</span><p className="font-bold text-sm">{formatCurrency(aReceber)}</p></div>
+            <div><span className="text-indigo-200">Projetado</span><p className="font-bold text-sm">{formatCurrency(saldoCaixa - aPagar + aReceber)}</p></div>
+          </div>
+        </div>
 
-        <Card className="border-l-4 border-l-red-500">
-          <CardContent className="py-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-slate-500 font-medium">Saidas do Mes</p>
-                <p className="text-2xl font-bold text-red-600 mt-1">{formatCurrency(totalSaidas)}</p>
-              </div>
-              <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center">
-                <TrendingDown className="w-5 h-5 text-red-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className={`border-l-4 ${saldo >= 0 ? 'border-l-indigo-500' : 'border-l-orange-500'}`}>
-          <CardContent className="py-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-slate-500 font-medium">Saldo do Mes</p>
-                <p className={`text-2xl font-bold mt-1 ${saldo >= 0 ? 'text-indigo-600' : 'text-orange-600'}`}>
-                  {formatCurrency(saldo)}
-                </p>
-              </div>
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${saldo >= 0 ? 'bg-indigo-100' : 'bg-orange-100'}`}>
-                <DollarSign className={`w-5 h-5 ${saldo >= 0 ? 'text-indigo-600' : 'text-orange-600'}`} />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className={`border-l-4 ${despesasVencidas > 0 ? 'border-l-red-500' : 'border-l-yellow-500'}`}>
-          <CardContent className="py-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-slate-500 font-medium">Contas Pendentes</p>
-                <p className="text-2xl font-bold text-yellow-600 mt-1">{despesasPendentes}</p>
-                {despesasVencidas > 0 && (
-                  <p className="text-xs text-red-500 font-medium">{despesasVencidas} vencida(s)</p>
-                )}
-              </div>
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${despesasVencidas > 0 ? 'bg-red-100' : 'bg-yellow-100'}`}>
-                <AlertCircle className={`w-5 h-5 ${despesasVencidas > 0 ? 'text-red-600' : 'text-yellow-600'}`} />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        {/* Entradas / Saidas / Resultado do mes com variacao */}
+        <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {(() => {
+            const varPct = (atual: number, ant: number) => ant === 0 ? null : ((atual - ant) / ant) * 100
+            const kpis = [
+              { label: 'Entradas do mes', val: totalEntradas, prev: entradasPrev, color: 'text-green-600', bg: 'bg-green-100', icon: <TrendingUp className="w-5 h-5 text-green-600" />, accent: 'border-l-green-500', up: 'good' },
+              { label: 'Saidas do mes', val: totalSaidas, prev: saidasPrev, color: 'text-red-600', bg: 'bg-red-100', icon: <TrendingDown className="w-5 h-5 text-red-600" />, accent: 'border-l-red-500', up: 'bad' },
+            ]
+            return (<>
+              {kpis.map(k => {
+                const p = varPct(k.val, k.prev)
+                const subiu = p != null && p >= 0
+                const bom = k.up === 'good' ? subiu : !subiu
+                return (
+                  <Card key={k.label} className={`border-l-4 ${k.accent}`}>
+                    <CardContent className="py-4">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-slate-500 font-medium">{k.label}</p>
+                        <div className={`w-9 h-9 ${k.bg} rounded-xl flex items-center justify-center`}>{k.icon}</div>
+                      </div>
+                      <p className={`text-2xl font-bold mt-1 ${k.color}`}>{formatCurrency(k.val)}</p>
+                      {p != null && (
+                        <p className={`text-xs font-medium mt-1 flex items-center gap-0.5 ${bom ? 'text-green-600' : 'text-red-500'}`}>
+                          {subiu ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+                          {Math.abs(p).toFixed(0)}% vs mes passado
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+                )
+              })}
+              <Card className={`border-l-4 ${saldo >= 0 ? 'border-l-indigo-500' : 'border-l-orange-500'}`}>
+                <CardContent className="py-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-slate-500 font-medium">Resultado do mes</p>
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${saldo >= 0 ? 'bg-indigo-100' : 'bg-orange-100'}`}>
+                      <DollarSign className={`w-5 h-5 ${saldo >= 0 ? 'text-indigo-600' : 'text-orange-600'}`} />
+                    </div>
+                  </div>
+                  <p className={`text-2xl font-bold mt-1 ${saldo >= 0 ? 'text-indigo-600' : 'text-orange-600'}`}>{formatCurrency(saldo)}</p>
+                  <p className="text-xs text-slate-400 mt-1">{despesasPendentes} conta(s) pendente(s){despesasVencidas > 0 ? ` · ${despesasVencidas} vencida(s)` : ''}</p>
+                </CardContent>
+              </Card>
+            </>)
+          })()}
+        </div>
       </div>
+
+      {/* Saldo por banco */}
+      {saldosBanco.length > 0 && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2"><Building2 size={16} className="text-slate-400" /><CardTitle>Saldo por Banco</CardTitle></div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {saldosBanco.map(b => (
+                <div key={b.nome} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0"><Building2 size={15} className="text-indigo-600" /></div>
+                    <span className="text-sm font-medium text-slate-700 truncate">{b.nome}</span>
+                  </div>
+                  <span className={`text-sm font-bold flex-shrink-0 ${b.saldo >= 0 ? 'text-slate-800' : 'text-red-600'}`}>{formatCurrency(b.saldo)}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="lg:col-span-2">
