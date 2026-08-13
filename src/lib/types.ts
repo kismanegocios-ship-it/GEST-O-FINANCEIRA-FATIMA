@@ -42,6 +42,11 @@ export interface Empresa {
   created_at: string
 }
 
+export interface Anexo {
+  path: string
+  nome: string
+}
+
 export interface Tag {
   id: string
   nome: string
@@ -61,6 +66,7 @@ export interface ContaReceber {
   categoria_id?: string | null
   conta_bancaria_id?: string | null
   observacoes?: string | null
+  anexos?: Anexo[] | null
   empresa_id?: string | null
   created_at: string
   centros_custo?: CentroCusto
@@ -115,6 +121,7 @@ export interface Despesa {
   solicitante?: string | null
   anexo_path?: string | null
   anexo_nome?: string | null
+  anexos?: Anexo[] | null
   tag_ids?: string[] | null
   empresa_id?: string | null
   created_at: string

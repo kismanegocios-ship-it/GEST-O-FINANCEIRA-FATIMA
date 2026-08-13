@@ -15,10 +15,13 @@ import { toast } from 'sonner'
 import {
   Plus, Search, CheckCircle, Trash2, Pencil, DollarSign, RotateCcw,
 } from 'lucide-react'
-import type { ContaReceber, CentroCusto, Categoria, ContaBancaria } from '@/lib/types'
+import type { ContaReceber, CentroCusto, Categoria, ContaBancaria, Anexo } from '@/lib/types'
 import { format, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns'
 import { fetchAllRows } from '@/lib/fetch-all'
 import { useEmpresa } from '@/lib/empresa'
+import { AnexosManager } from '@/components/anexos'
+import { subirAnexos } from '@/lib/anexos'
+import { Paperclip } from 'lucide-react'
 
 const STATUS_OPTIONS = ['todos', 'pendente', 'recebido', 'vencido', 'cancelado']
 const statusVariant: Record<string, 'warning' | 'success' | 'danger' | 'neutral'> = {
@@ -49,6 +52,8 @@ export default function ContasReceberPage() {
   const [perIni, setPerIni] = useState('')
   const [perFim, setPerFim] = useState('')
   const { empresaId } = useEmpresa()
+  const [modalAnexos, setModalAnexos] = useState<Anexo[]>([])
+  const [stagedAnexos, setStagedAnexos] = useState<File[]>([])
 
   // Modal de baixa (receber)
   const [modalReceber, setModalReceber] = useState<ContaReceber | null>(null)
@@ -86,9 +91,11 @@ export default function ContasReceberPage() {
     { label: 'Este ano', on: () => setPeriodo(startOfYear(hojeRef), endOfYear(hojeRef)) },
   ]
 
-  const abrirNovo = () => { setEditando(null); setForm(emptyForm); setModalOpen(true) }
+  const abrirNovo = () => { setEditando(null); setForm(emptyForm); setModalAnexos([]); setStagedAnexos([]); setModalOpen(true) }
   const abrirEditar = (c: ContaReceber) => {
     setEditando(c)
+    setModalAnexos(c.anexos ?? [])
+    setStagedAnexos([])
     setForm({
       descricao: c.descricao, valor: String(c.valor), data_vencimento: c.data_vencimento,
       centro_custo_id: c.centro_custo_id ?? '', categoria_id: c.categoria_id ?? '', observacoes: c.observacoes ?? '',
@@ -104,6 +111,16 @@ export default function ContasReceberPage() {
       centro_custo_id: form.centro_custo_id || null, categoria_id: form.categoria_id || null,
       observacoes: form.observacoes || null,
       ...(empresaId && !editando ? { empresa_id: empresaId } : {}),
+    }
+    // Registro novo com anexos escolhidos → insere pegando o id pra enviar os arquivos
+    if (!editando && stagedAnexos.length > 0) {
+      const { data: novo, error } = await supabase.from('contas_receber').insert(payload).select('id').single()
+      if (error || !novo) { setSaving(false); toast.error('Erro ao salvar: ' + (error?.message ?? 'sem retorno')); return }
+      try { await subirAnexos('contas_receber', (novo as { id: string }).id, [], stagedAnexos) } catch (e) { toast.error('Salvo, mas erro nos anexos: ' + (e as Error).message) }
+      setSaving(false)
+      toast.success('Conta a receber cadastrada!')
+      setModalOpen(false); setForm(emptyForm); setStagedAnexos([]); load()
+      return
     }
     const { error } = editando
       ? await supabase.from('contas_receber').update(payload).eq('id', editando.id)
@@ -255,7 +272,7 @@ export default function ContasReceberPage() {
               ) : filtradas.map(c => (
                 <tr key={c.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-6 py-3">
-                    <p className="font-medium text-slate-800">{c.descricao}</p>
+                    <p className="font-medium text-slate-800">{c.descricao}{(c.anexos?.length ?? 0) > 0 && <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-indigo-500 align-middle"><Paperclip size={11} />{c.anexos!.length}</span>}</p>
                     {(c as any).centros_custo?.nome && <p className="text-xs text-slate-400 mt-0.5">{(c as any).centros_custo.nome}</p>}
                   </td>
                   <td className="px-4 py-3 text-slate-600 text-sm">{formatDate(c.data_vencimento)}</td>
@@ -292,7 +309,7 @@ export default function ContasReceberPage() {
             return (
               <MobileCard key={c.id} className="py-4">
                 <div className="flex items-start justify-between gap-2 mb-2">
-                  <p className="font-bold text-slate-800 text-sm leading-tight flex-1 min-w-0">{c.descricao}</p>
+                  <p className="font-bold text-slate-800 text-sm leading-tight flex-1 min-w-0">{c.descricao}{(c.anexos?.length ?? 0) > 0 && <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-indigo-500 align-middle"><Paperclip size={11} />{c.anexos!.length}</span>}</p>
                   <Badge variant={statusVariant[c.status]}>{statusLabel[c.status]}</Badge>
                 </div>
                 <div className="flex items-center justify-between mb-2">
@@ -341,6 +358,17 @@ export default function ContasReceberPage() {
           <div className="col-span-1 sm:col-span-2">
             <label className="block text-xs font-medium text-slate-600 mb-1.5">Observacoes</label>
             <textarea className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/30" rows={2} value={form.observacoes} onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))} />
+          </div>
+          <div className="col-span-1 sm:col-span-2">
+            <label className="block text-xs font-medium text-slate-600 mb-1.5">Anexos (comprovantes)</label>
+            <AnexosManager
+              table="contas_receber"
+              rowId={editando?.id ?? null}
+              anexos={modalAnexos}
+              onChanged={a => { setModalAnexos(a); load() }}
+              staged={stagedAnexos}
+              onStagedChange={setStagedAnexos}
+            />
           </div>
         </div>
         <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-slate-100">
