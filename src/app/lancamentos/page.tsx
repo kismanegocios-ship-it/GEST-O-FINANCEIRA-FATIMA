@@ -82,7 +82,7 @@ export default function LancamentosPage() {
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set())
   const [priorLancs, setPriorLancs] = useState<Pick<Lancamento, 'valor' | 'tipo' | 'conta_bancaria_id' | 'centro_custo_id' | 'categoria_id'>[]>([])
 
-  const { empresaId } = useEmpresa()
+  const { empresaId, empresa } = useEmpresa()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -274,62 +274,120 @@ export default function LancamentosPage() {
   }
 
   const exportarPDF = () => {
+    if (filtrados.length === 0) { toast.error('Nenhum lancamento para exportar com os filtros atuais'); return }
     const periodoNome = `${formatDate(dataIni)} a ${formatDate(dataFim)}`
+    const geradoEm = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    const nomeEmpresa = esc(empresa?.nome ?? 'Sistema Financeiro Fatima')
     const pdfCols = COLS.filter(c => cols.has(c.key))
 
     const nomesCentros = centros.filter(c => filtroCentros.has(c.id)).map(c => c.nome)
     const nomesCategorias = categorias.filter(c => filtroCategorias.has(c.id)).map(c => c.nome)
-
-    // Linha do escopo/filtros aplicados, pra quem recebe entender o recorte
     const escopo = [
-      filtroConta && `Conta: ${contas.find(c => c.id === filtroConta)?.nome ?? ''}`,
-      nomesCentros.length > 0 && `Centros: ${nomesCentros.join(', ')}`,
-      nomesCategorias.length > 0 && `Categorias: ${nomesCategorias.join(', ')}`,
-      filtroTipo !== 'todos' && `Tipo: ${filtroTipo === 'entrada' ? 'Entradas' : 'Saidas'}`,
-      busca && `Busca: "${busca}"`,
-    ].filter(Boolean).map(t => esc(t as string)).join(' &nbsp;|&nbsp; ')
+      filtroConta ? `Conta: ${contas.find(c => c.id === filtroConta)?.nome ?? ''}` : '',
+      nomesCentros.length > 0 ? `Centros: ${nomesCentros.join(', ')}` : '',
+      nomesCategorias.length > 0 ? `Categorias: ${nomesCategorias.join(', ')}` : '',
+      filtroTipo !== 'todos' ? `Tipo: ${filtroTipo === 'entrada' ? 'Entradas' : 'Saidas'}` : '',
+      busca ? `Busca: "${busca}"` : '',
+    ].filter(Boolean).map(t => esc(t as string)).join(' &nbsp;•&nbsp; ') || 'Todos os lancamentos'
+
+    // Quebra: saidas por categoria (barras)
+    const catMap = new Map<string, number>()
+    for (const l of filtrados) {
+      if (l.tipo !== 'saida') continue
+      const nome = (l as any).categorias?.nome ?? 'Sem categoria'
+      catMap.set(nome, (catMap.get(nome) ?? 0) + Number(l.valor))
+    }
+    const porCat = Array.from(catMap.entries()).sort((a, b) => b[1] - a[1])
+    const maxCat = Math.max(...porCat.map(c => c[1]), 1)
+    const linhasCat = porCat.map(([nome, valor]) => {
+      const pct = totalSaidas > 0 ? (valor / totalSaidas) * 100 : 0
+      return `<tr><td>${esc(nome)}</td><td class="num">${formatCurrency(valor)}</td><td class="num">${pct.toFixed(1)}%</td><td style="width:38%"><div class="bar"><span style="width:${(valor / maxCat) * 100}%"></span></div></td></tr>`
+    }).join('')
 
     const thHtml = pdfCols.map(c => `<th style="text-align:${c.align}">${c.label}</th>`).join('')
     const linhasHtml = linhas.map(({ l, saldoAcum }) => `<tr>${
       pdfCols.map(c => `<td style="text-align:${c.align}">${pdfCell(l, c.key, saldoAcum)}</td>`).join('')
     }</tr>`).join('')
 
+    const resultado = totalEntradas - totalSaidas
+
     const html = `
       <!DOCTYPE html><html lang="pt-BR"><head>
-      <meta charset="UTF-8"><title>Extrato de Lancamentos – ${periodoNome}</title>
+      <meta charset="UTF-8"><title>Extrato de Lancamentos — ${nomeEmpresa}</title>
       <style>
-        body { font-family: Arial, sans-serif; font-size: 11px; color: #1e293b; margin: 24px; }
-        h1 { font-size: 18px; margin-bottom: 4px; }
-        .sub { color: #64748b; font-size: 11px; margin-bottom: 4px; }
-        .escopo { color: #475569; font-size: 10px; margin-bottom: 14px; }
-        .resumo { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-        .resumo div { padding: 8px 16px; border-radius: 6px; }
-        .ini { background: #f1f5f9; color: #334155; font-weight: 600; }
-        .ent { background: #f0fdf4; color: #16a34a; font-weight: 600; }
-        .sai { background: #fef2f2; color: #dc2626; font-weight: 600; }
-        .fim { background: #eef2ff; color: #4f46e5; font-weight: 700; }
-        table { width: 100%; border-collapse: collapse; }
-        th { background: #f8fafc; padding: 6px 8px; font-size: 10px;
-             text-transform: uppercase; letter-spacing: .05em; color: #64748b;
-             border-bottom: 2px solid #e2e8f0; }
-        td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; }
-        tfoot td { font-weight: 700; border-top: 2px solid #e2e8f0; background: #f8fafc; }
-        .footer { margin-top: 16px; font-size: 10px; color: #94a3b8; }
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, 'Segoe UI', Arial, sans-serif; font-size: 11px; color: #0f172a; margin: 0; padding: 28px 32px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .head { display:flex; justify-content:space-between; align-items:flex-start; padding-bottom:16px; border-bottom:3px solid #4f46e5; margin-bottom:18px; }
+        .brand { display:flex; align-items:center; gap:10px; }
+        .logo { width:38px; height:38px; border-radius:10px; background:linear-gradient(135deg,#6366f1,#7c3aed); color:#fff; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:800; }
+        .brand h2 { margin:0; font-size:13px; color:#4f46e5; letter-spacing:.02em; }
+        .brand p { margin:2px 0 0; font-size:10px; color:#64748b; }
+        .head .rt { text-align:right; }
+        .head .rt h1 { margin:0; font-size:20px; }
+        .head .rt p { margin:3px 0 0; font-size:10px; color:#64748b; }
+        .scope { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; font-size:10px; color:#475569; margin-bottom:16px; }
+        .kpis { display:flex; gap:10px; margin-bottom:20px; }
+        .kpi { flex:1; border:1px solid #e2e8f0; border-radius:10px; padding:11px 13px; }
+        .kpi .lbl { font-size:9px; text-transform:uppercase; letter-spacing:.05em; color:#64748b; font-weight:700; }
+        .kpi .val { font-size:15px; font-weight:800; margin-top:3px; }
+        .kpi.k1 { border-left:4px solid #94a3b8; } .kpi.k1 .val { color:#334155; }
+        .kpi.k2 { border-left:4px solid #22c55e; } .kpi.k2 .val { color:#15803d; }
+        .kpi.k3 { border-left:4px solid #ef4444; } .kpi.k3 .val { color:#b91c1c; }
+        .kpi.k4 { border-left:4px solid #6366f1; background:#eef2ff; } .kpi.k4 .val { color:#4338ca; }
+        h3 { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#334155; margin:22px 0 8px; padding-bottom:5px; border-bottom:1px solid #e2e8f0; }
+        table { width:100%; border-collapse:collapse; }
+        th { text-align:left; padding:7px 8px; font-size:9px; text-transform:uppercase; letter-spacing:.04em; color:#64748b; background:#f8fafc; border-bottom:1px solid #e2e8f0; }
+        td { padding:7px 8px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
+        tbody tr:nth-child(even) td { background:#fbfcfe; }
+        .num { text-align:right; font-weight:600; white-space:nowrap; }
+        .bar { background:#eef2ff; border-radius:6px; height:10px; overflow:hidden; }
+        .bar span { display:block; height:10px; background:linear-gradient(90deg,#f43f5e,#fb7185); border-radius:6px; }
+        tfoot td { font-weight:800; border-top:2px solid #e2e8f0; background:#f8fafc; }
+        .foot { margin-top:22px; padding-top:10px; border-top:1px solid #e2e8f0; font-size:9px; color:#94a3b8; display:flex; justify-content:space-between; }
+        @media print { body { padding:0; } }
       </style></head><body>
-      <h1>Extrato de Lancamentos</h1>
-      <p class="sub">Periodo: ${periodoNome} &bull; Gerado em ${new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
-      ${escopo ? `<p class="escopo">${escopo}</p>` : ''}
-      <div class="resumo">
-        <div class="ini">Saldo inicial: ${formatCurrency(saldoInicial)}</div>
-        <div class="ent">Entradas: ${formatCurrency(totalEntradas)}</div>
-        <div class="sai">Saidas: ${formatCurrency(totalSaidas)}</div>
-        <div class="fim">Saldo final: ${formatCurrency(saldoFinal)}</div>
+      <div class="head">
+        <div class="brand">
+          <div class="logo">${(nomeEmpresa[0] ?? 'F').toUpperCase()}</div>
+          <div><h2>${nomeEmpresa}</h2><p>Gestao Financeira</p></div>
+        </div>
+        <div class="rt">
+          <h1>Extrato de Lancamentos</h1>
+          <p>Periodo: ${periodoNome} • Gerado em ${geradoEm}</p>
+        </div>
       </div>
+
+      <div class="scope">${escopo} &nbsp;•&nbsp; ${filtrados.length} lancamento(s)</div>
+
+      <div class="kpis">
+        <div class="kpi k1"><div class="lbl">Saldo inicial</div><div class="val">${formatCurrency(saldoInicial)}</div></div>
+        <div class="kpi k2"><div class="lbl">Entradas</div><div class="val">+${formatCurrency(totalEntradas)}</div></div>
+        <div class="kpi k3"><div class="lbl">Saidas</div><div class="val">-${formatCurrency(totalSaidas)}</div></div>
+        <div class="kpi k4"><div class="lbl">Saldo final</div><div class="val">${formatCurrency(saldoFinal)}</div></div>
+      </div>
+
+      ${porCat.length > 0 ? `
+      <h3>Saidas por Categoria</h3>
+      <table>
+        <thead><tr><th>Categoria</th><th class="num">Valor</th><th class="num">% Saidas</th><th>Participacao</th></tr></thead>
+        <tbody>${linhasCat}</tbody>
+        <tfoot><tr><td>Total de saidas</td><td class="num">${formatCurrency(totalSaidas)}</td><td class="num">100%</td><td></td></tr></tfoot>
+      </table>` : ''}
+
+      <h3>Extrato Detalhado</h3>
       <table>
         <thead><tr>${thHtml}</tr></thead>
         <tbody>${linhasHtml}</tbody>
+        <tfoot><tr>
+          <td colspan="${Math.max(1, pdfCols.length - 1)}">Resultado do periodo (${filtrados.length} lancamentos)</td>
+          <td class="num" style="color:${resultado >= 0 ? '#15803d' : '#b91c1c'}">${resultado >= 0 ? '+' : ''}${formatCurrency(resultado)}</td>
+        </tr></tfoot>
       </table>
-      <p class="footer">Total: ${filtrados.length} lancamento(s)</p>
+
+      <div class="foot">
+        <span>${nomeEmpresa} • Sistema Financeiro Fatima</span>
+        <span>Documento gerado automaticamente • ${geradoEm}</span>
+      </div>
       </body></html>
     `
     const win = window.open('', '_blank')
