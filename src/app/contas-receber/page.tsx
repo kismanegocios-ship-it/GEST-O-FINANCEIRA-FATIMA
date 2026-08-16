@@ -34,8 +34,9 @@ const statusLabel: Record<string, string> = {
 interface FormData {
   descricao: string; valor: string; data_vencimento: string
   centro_custo_id: string; categoria_id: string; observacoes: string
+  parcelado: boolean; num_parcelas: string
 }
-const emptyForm: FormData = { descricao: '', valor: '', data_vencimento: '', centro_custo_id: '', categoria_id: '', observacoes: '' }
+const emptyForm: FormData = { descricao: '', valor: '', data_vencimento: '', centro_custo_id: '', categoria_id: '', observacoes: '', parcelado: false, num_parcelas: '2' }
 
 export default function ContasReceberPage() {
   const [itens, setItens] = useState<ContaReceber[]>([])
@@ -100,6 +101,7 @@ export default function ContasReceberPage() {
     setForm({
       descricao: c.descricao, valor: String(c.valor), data_vencimento: c.data_vencimento,
       centro_custo_id: c.centro_custo_id ?? '', categoria_id: c.categoria_id ?? '', observacoes: c.observacoes ?? '',
+      parcelado: false, num_parcelas: '2',
     })
     setModalOpen(true)
   }
@@ -107,6 +109,29 @@ export default function ContasReceberPage() {
   const salvar = async () => {
     if (!form.descricao || !form.valor || !form.data_vencimento) { toast.error('Preencha os campos obrigatorios'); return }
     setSaving(true)
+
+    // ── Modo parcelas: cria N recebimentos mensais (ex: parcelas de um contrato) ──
+    if (form.parcelado && !editando) {
+      const n = Math.max(2, Math.min(120, parseInt(form.num_parcelas) || 2))
+      const base = new Date(form.data_vencimento + 'T12:00:00')
+      const registros = Array.from({ length: n }, (_, i) => ({
+        descricao: `${form.descricao} (${i + 1}/${n})`,
+        valor: parseFloat(form.valor),
+        data_vencimento: format(addMonthsSafe(base, i), 'yyyy-MM-dd'),
+        status: 'pendente',
+        centro_custo_id: form.centro_custo_id || null,
+        categoria_id: form.categoria_id || null,
+        observacoes: form.observacoes || null,
+        ...(empresaId ? { empresa_id: empresaId } : {}),
+      }))
+      const { error } = await supabase.from('contas_receber').insert(registros)
+      setSaving(false)
+      if (error) { toast.error('Erro ao criar parcelas: ' + error.message); return }
+      toast.success(`${n} parcelas criadas! Total ${formatCurrency(parseFloat(form.valor) * n)}`)
+      setModalOpen(false); setForm(emptyForm); setStagedAnexos([]); load()
+      return
+    }
+
     const payload = {
       descricao: form.descricao, valor: parseFloat(form.valor), data_vencimento: form.data_vencimento,
       centro_custo_id: form.centro_custo_id || null, categoria_id: form.categoria_id || null,
@@ -514,30 +539,68 @@ export default function ContasReceberPage() {
             </Select>
           </div>
           <div className="col-span-1 sm:col-span-2">
-            <Select label="Centro de Custo" value={form.centro_custo_id} onChange={e => setForm(f => ({ ...f, centro_custo_id: e.target.value }))}>
+            <Select label="Centro de Custo (contrato)" value={form.centro_custo_id} onChange={e => setForm(f => ({ ...f, centro_custo_id: e.target.value }))}>
               <option value="">Sem centro de custo</option>
               {centros.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
             </Select>
           </div>
+
+          {/* Parcelamento — so ao criar */}
+          {!editando && (
+            <div className="col-span-1 sm:col-span-2">
+              <div className={`rounded-2xl border-2 p-3 transition-all cursor-pointer ${form.parcelado ? 'border-blue-400 bg-blue-50' : 'border-slate-100 bg-slate-50'}`}
+                onClick={() => setForm(f => ({ ...f, parcelado: !f.parcelado }))}>
+                <div className="flex items-center gap-3">
+                  <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 ${form.parcelado ? 'bg-blue-600 border-blue-600' : 'border-slate-300'}`}>
+                    {form.parcelado && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-700">Parcelado (varias parcelas do contrato)</p>
+                    <p className="text-xs text-slate-400">Cria N recebimentos mensais com o mesmo valor</p>
+                  </div>
+                </div>
+                {form.parcelado && (
+                  <div className="mt-3 flex items-center gap-3" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center gap-2">
+                      <button type="button" onClick={() => setForm(f => ({ ...f, num_parcelas: String(Math.max(2, parseInt(f.num_parcelas) - 1)) }))}
+                        className="w-8 h-8 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold flex items-center justify-center hover:bg-slate-100">−</button>
+                      <input type="number" min={2} max={120}
+                        className="w-16 text-center px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                        value={form.num_parcelas} onChange={e => setForm(f => ({ ...f, num_parcelas: e.target.value }))} />
+                      <button type="button" onClick={() => setForm(f => ({ ...f, num_parcelas: String(Math.min(120, parseInt(f.num_parcelas) + 1)) }))}
+                        className="w-8 h-8 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold flex items-center justify-center hover:bg-slate-100">+</button>
+                      <span className="text-xs text-slate-500">parcelas mensais</span>
+                    </div>
+                    <div className="bg-white border border-blue-100 rounded-xl px-3 py-1.5 text-center ml-auto">
+                      <p className="text-[10px] text-slate-400">Total</p>
+                      <p className="text-sm font-bold text-blue-600">{form.valor ? formatCurrency(parseFloat(form.valor) * (parseInt(form.num_parcelas) || 0)) : '—'}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           <div className="col-span-1 sm:col-span-2">
             <label className="block text-xs font-medium text-slate-600 mb-1.5">Observacoes</label>
             <textarea className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/30" rows={2} value={form.observacoes} onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))} />
           </div>
-          <div className="col-span-1 sm:col-span-2">
-            <label className="block text-xs font-medium text-slate-600 mb-1.5">Anexos (comprovantes)</label>
-            <AnexosManager
-              table="contas_receber"
-              rowId={editando?.id ?? null}
-              anexos={modalAnexos}
-              onChanged={a => { setModalAnexos(a); load() }}
-              staged={stagedAnexos}
-              onStagedChange={setStagedAnexos}
-            />
-          </div>
+          {!(form.parcelado && !editando) && (
+            <div className="col-span-1 sm:col-span-2">
+              <label className="block text-xs font-medium text-slate-600 mb-1.5">Anexos (comprovantes)</label>
+              <AnexosManager
+                table="contas_receber"
+                rowId={editando?.id ?? null}
+                anexos={modalAnexos}
+                onChanged={a => { setModalAnexos(a); load() }}
+                staged={stagedAnexos}
+                onStagedChange={setStagedAnexos}
+              />
+            </div>
+          )}
         </div>
         <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-slate-100">
           <Button variant="secondary" onClick={() => setModalOpen(false)}>Cancelar</Button>
-          <Button onClick={salvar} disabled={saving}>{saving ? 'Salvando...' : editando ? 'Salvar' : 'Cadastrar'}</Button>
+          <Button onClick={salvar} disabled={saving}>{saving ? 'Salvando...' : editando ? 'Salvar' : form.parcelado ? `Criar ${form.num_parcelas || '?'} parcelas` : 'Cadastrar'}</Button>
         </div>
       </Modal>
 

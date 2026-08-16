@@ -24,7 +24,7 @@ import { useEmpresa } from '@/lib/empresa'
 import { useTags } from '@/lib/use-tags'
 import type { Tag, Anexo } from '@/lib/types'
 import { AnexosManager } from '@/components/anexos'
-import { subirAnexos } from '@/lib/anexos'
+import { subirAnexos, anexoUrl } from '@/lib/anexos'
 
 // Quantos meses a frente as contas recorrentes sao provisionadas
 const HORIZONTE_MESES = 12
@@ -1248,6 +1248,35 @@ export default function DespesasPage() {
               <p className="font-semibold text-slate-800">{modalPagar.descricao}</p>
               <p className="text-2xl font-bold text-red-600 mt-1">{formatCurrency(Number(modalPagar.valor))}</p>
             </div>
+
+            {/* Preview dos comprovantes anexados (confere antes de dar baixa) */}
+            {(modalPagar.anexos?.length ?? 0) > 0 && (
+              <div>
+                <p className="text-xs font-medium text-slate-500 mb-1.5">Comprovantes anexados ({modalPagar.anexos!.length})</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {modalPagar.anexos!.map(a => {
+                    const isPdf = /\.pdf$/i.test(a.nome)
+                    const url = anexoUrl(a.path)
+                    return (
+                      <a key={a.path} href={url} target="_blank" rel="noopener noreferrer"
+                        className="group block rounded-lg border border-slate-200 overflow-hidden hover:border-indigo-400 transition-all" title={a.nome}>
+                        {isPdf ? (
+                          <div className="h-20 flex flex-col items-center justify-center bg-slate-50 text-slate-500">
+                            <Paperclip size={16} />
+                            <span className="text-[9px] mt-1 font-semibold">PDF</span>
+                          </div>
+                        ) : (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={url} alt={a.nome} className="h-20 w-full object-cover" />
+                        )}
+                        <p className="text-[9px] text-slate-500 truncate px-1.5 py-1 group-hover:text-indigo-600">{a.nome}</p>
+                      </a>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
             <Input label="Data do Pagamento *" type="date" value={dataPagamento} onChange={e => setDataPagamento(e.target.value)} />
             <div className="grid grid-cols-2 gap-3">
               <Select label="Forma de Pagamento *" value={pagForma} onChange={e => setPagForma(e.target.value)}>
