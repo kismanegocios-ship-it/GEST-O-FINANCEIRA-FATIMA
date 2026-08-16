@@ -70,9 +70,10 @@ export default function ConciliacaoPage() {
     centro_custo_id: '', conta_bancaria_id: '', forma_pagamento: '', observacoes: '',
   })
 
-  const { empresaId } = useEmpresa()
+  const { empresaId, loading: empLoading } = useEmpresa()
 
   const load = useCallback(async () => {
+    if (empLoading) return // espera saber qual empresa esta ativa (evita misturar empresas)
     setLoading(true)
     const escopo = <T,>(q: T): T => (empresaId ? (q as any).eq('empresa_id', empresaId) : q)
     const [ext, lanc, cb, cats, ccs] = await Promise.all([
@@ -88,7 +89,7 @@ export default function ConciliacaoPage() {
     setCategorias((cats.data ?? []) as Categoria[])
     setCentros((ccs.data ?? []) as CentroCusto[])
     setLoading(false)
-  }, [empresaId])
+  }, [empresaId, empLoading])
 
   useEffect(() => { load() }, [load])
 

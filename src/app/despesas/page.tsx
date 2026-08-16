@@ -82,7 +82,7 @@ export default function DespesasPage() {
   const [saving, setSaving] = useState(false)
   const [busca, setBusca] = useState('')
   const [filtroStatus, setFiltroStatus] = useState('todos')
-  const { empresaId, empresa } = useEmpresa()
+  const { empresaId, empresa, loading: empLoading } = useEmpresa()
   const { tags, criar: criarTag, renomear: renomearTag, excluir: excluirTag } = useTags(empresaId)
   const [filtroTags, setFiltroTags] = useState<Set<string>>(new Set())
   const [gerenciarTags, setGerenciarTags] = useState(false)
@@ -223,6 +223,7 @@ export default function DespesasPage() {
   }
 
   const load = useCallback(async () => {
+    if (empLoading) return // espera saber qual empresa esta ativa (evita misturar empresas)
     setLoading(true)
     const escopo = <T,>(q: T): T => (empresaId ? (q as any).eq('empresa_id', empresaId) : q)
 
@@ -248,7 +249,7 @@ export default function DespesasPage() {
     setCategorias(cat.data ?? [])
     setContas((cb.data ?? []) as ContaBancaria[])
     setLoading(false)
-  }, [empresaId])
+  }, [empresaId, empLoading])
 
   useEffect(() => { load() }, [load])
 

@@ -33,16 +33,17 @@ export default function CategoriasPage() {
   const [form, setForm] = useState<FormData>(emptyForm)
   const [saving, setSaving] = useState(false)
   const [filtroTipo, setFiltroTipo] = useState<'todos' | 'entrada' | 'saida'>('todos')
-  const { empresaId } = useEmpresa()
+  const { empresaId, loading: empLoading } = useEmpresa()
 
   const load = useCallback(async () => {
+    if (empLoading) return // espera saber qual empresa esta ativa (evita misturar empresas)
     setLoading(true)
     let q = supabase.from('categorias').select('*').order('tipo').order('nome')
     if (empresaId) q = q.eq('empresa_id', empresaId)
     const { data } = await q
     setCategorias((data ?? []) as Categoria[])
     setLoading(false)
-  }, [empresaId])
+  }, [empresaId, empLoading])
 
   useEffect(() => { load() }, [load])
 

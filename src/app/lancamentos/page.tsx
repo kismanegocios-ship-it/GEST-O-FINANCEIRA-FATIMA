@@ -83,9 +83,10 @@ export default function LancamentosPage() {
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set())
   const [priorLancs, setPriorLancs] = useState<Pick<Lancamento, 'valor' | 'tipo' | 'conta_bancaria_id' | 'centro_custo_id' | 'categoria_id'>[]>([])
 
-  const { empresaId, empresa } = useEmpresa()
+  const { empresaId, empresa, loading: empLoading } = useEmpresa()
 
   const load = useCallback(async () => {
+    if (empLoading) return // espera saber qual empresa esta ativa (evita misturar empresas)
     setLoading(true)
     const ini = dataIni
     const fim = dataFim
@@ -108,7 +109,7 @@ export default function LancamentosPage() {
     setContas((cb.data ?? []) as ContaBancaria[])
     setPriorLancs(prior)
     setLoading(false)
-  }, [dataIni, dataFim, empresaId])
+  }, [dataIni, dataFim, empresaId, empLoading])
 
   useEffect(() => { load() }, [load])
 

@@ -53,7 +53,7 @@ export default function ContasReceberPage() {
   const [filtroCentro, setFiltroCentro] = useState('')
   const [perIni, setPerIni] = useState('')
   const [perFim, setPerFim] = useState('')
-  const { empresaId, empresa } = useEmpresa()
+  const { empresaId, empresa, loading: empLoading } = useEmpresa()
   const [modalAnexos, setModalAnexos] = useState<Anexo[]>([])
   const [stagedAnexos, setStagedAnexos] = useState<File[]>([])
 
@@ -64,6 +64,7 @@ export default function ContasReceberPage() {
   const [recForma, setRecForma] = useState('pix')
 
   const load = useCallback(async () => {
+    if (empLoading) return // espera saber qual empresa esta ativa (evita misturar empresas)
     setLoading(true)
     const esc = <T,>(q: T): T => (empresaId ? (q as any).eq('empresa_id', empresaId) : q)
     const hoje = format(new Date(), 'yyyy-MM-dd')
@@ -80,7 +81,7 @@ export default function ContasReceberPage() {
     setCategorias((cat as any).data ?? [])
     setContas(((cb as any).data ?? []) as ContaBancaria[])
     setLoading(false)
-  }, [empresaId])
+  }, [empresaId, empLoading])
 
   useEffect(() => { load() }, [load])
 

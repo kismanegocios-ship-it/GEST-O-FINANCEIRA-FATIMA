@@ -42,10 +42,11 @@ export default function Dashboard() {
   const [entradasPrev, setEntradasPrev] = useState(0)
   const [saidasPrev, setSaidasPrev] = useState(0)
   const [loading, setLoading] = useState(true)
-  const { empresaId } = useEmpresa()
+  const { empresaId, loading: empLoading } = useEmpresa()
 
   useEffect(() => {
     async function load() {
+      if (empLoading) return // espera saber qual empresa esta ativa (evita misturar empresas)
       const esc = <T,>(q: T): T => (empresaId ? (q as any).eq('empresa_id', empresaId) : q)
       const hoje = new Date()
       const hojeStr = format(hoje, 'yyyy-MM-dd')
@@ -135,7 +136,7 @@ export default function Dashboard() {
       setLoading(false)
     }
     load()
-  }, [empresaId])
+  }, [empresaId, empLoading])
 
   const saldo = totalEntradas - totalSaidas
 

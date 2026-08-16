@@ -40,9 +40,10 @@ export default function ContasPage() {
 
   const [saldosPorConta, setSaldosPorConta] = useState<Record<string, number>>({})
 
-  const { empresaId } = useEmpresa()
+  const { empresaId, loading: empLoading } = useEmpresa()
 
   const load = useCallback(async () => {
+    if (empLoading) return // espera saber qual empresa esta ativa (evita misturar empresas)
     setLoading(true)
     // Paginado: soma TODOS os lancamentos (evita truncar em 1000 e errar o saldo)
     const [contasRes, lancs] = await Promise.all([
@@ -62,7 +63,7 @@ export default function ContasPage() {
     }
     setSaldosPorConta(somas)
     setLoading(false)
-  }, [empresaId])
+  }, [empresaId, empLoading])
 
   useEffect(() => { load() }, [load])
 

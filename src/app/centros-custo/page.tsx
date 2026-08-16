@@ -34,16 +34,17 @@ export default function CentrosCustoPage() {
   const [form, setForm] = useState<FormData>(emptyForm)
   const [saving, setSaving] = useState(false)
 
-  const { empresaId } = useEmpresa()
+  const { empresaId, loading: empLoading } = useEmpresa()
 
   const load = useCallback(async () => {
+    if (empLoading) return // espera saber qual empresa esta ativa (evita misturar empresas)
     setLoading(true)
     let q = supabase.from('centros_custo').select('*').order('nome')
     if (empresaId) q = q.eq('empresa_id', empresaId)
     const { data } = await q
     setCentros(data ?? [])
     setLoading(false)
-  }, [empresaId])
+  }, [empresaId, empLoading])
 
   useEffect(() => { load() }, [load])
 

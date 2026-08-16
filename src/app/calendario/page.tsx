@@ -73,11 +73,12 @@ export default function CalendarioPage() {
   const [diaSelecionado, setDiaSelecionado] = useState<Date | null>(null)
   const [baseUrl, setBaseUrl] = useState('')
   const [filtro, setFiltro] = useState<'todos' | 'pagar' | 'receber'>('todos')
-  const { empresaId } = useEmpresa()
+  const { empresaId, loading: empLoading } = useEmpresa()
 
   useEffect(() => { setBaseUrl(window.location.origin) }, [])
 
   const load = useCallback(async () => {
+    if (empLoading) return // espera saber qual empresa esta ativa (evita misturar empresas)
     setLoading(true)
     const esc = <T,>(q: T): T => (empresaId ? (q as any).eq('empresa_id', empresaId) : q)
 
@@ -121,7 +122,7 @@ export default function CalendarioPage() {
     setReceber((mesRec.data ?? []) as ContaReceber[])
     setProximasRec((proxRec.data ?? []) as ContaReceber[])
     setLoading(false)
-  }, [mes, empresaId])
+  }, [mes, empresaId, empLoading])
 
   useEffect(() => { load() }, [load])
 
