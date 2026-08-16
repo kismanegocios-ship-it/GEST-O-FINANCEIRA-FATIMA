@@ -22,11 +22,12 @@ interface FormData {
   conta: string
   tipo: string
   saldo_inicial: string
+  saldo_negativo: boolean
   ativo: boolean
 }
 
 const emptyForm: FormData = {
-  nome: '', banco: '', agencia: '', conta: '', tipo: 'corrente', saldo_inicial: '', ativo: true,
+  nome: '', banco: '', agencia: '', conta: '', tipo: 'corrente', saldo_inicial: '', saldo_negativo: false, ativo: true,
 }
 
 export default function ContasPage() {
@@ -79,7 +80,8 @@ export default function ContasPage() {
       agencia: conta.agencia ?? '',
       conta: conta.conta ?? '',
       tipo: conta.tipo,
-      saldo_inicial: String(conta.saldo_inicial || ''),
+      saldo_inicial: conta.saldo_inicial ? String(Math.abs(Number(conta.saldo_inicial))) : '',
+      saldo_negativo: Number(conta.saldo_inicial) < 0,
       ativo: conta.ativo,
     })
     setModalOpen(true)
@@ -94,7 +96,7 @@ export default function ContasPage() {
       agencia: form.agencia.trim() || null,
       conta: form.conta.trim() || null,
       tipo: form.tipo,
-      saldo_inicial: parseFloat(form.saldo_inicial) || 0,
+      saldo_inicial: (Math.abs(parseFloat(form.saldo_inicial)) || 0) * (form.saldo_negativo ? -1 : 1),
       ativo: form.ativo,
     }
     const { error } = editando
@@ -203,7 +205,7 @@ export default function ContasPage() {
                   )}
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-slate-400">Saldo inicial</span>
-                    <span className="text-slate-700 font-semibold">{formatCurrency(Number(conta.saldo_inicial))}</span>
+                    <span className={`font-semibold ${Number(conta.saldo_inicial) < 0 ? 'text-red-600' : 'text-slate-700'}`}>{formatCurrency(Number(conta.saldo_inicial))}</span>
                   </div>
                 </div>
 
@@ -269,11 +271,25 @@ export default function ContasPage() {
               <option value="caixa">Caixa</option>
               <option value="investimento">Investimento</option>
             </Select>
-            <CurrencyInput
-              label="Saldo inicial"
-              value={form.saldo_inicial}
-              onChange={e => setForm(f => ({ ...f, saldo_inicial: e.target.value }))}
-            />
+            <div>
+              <CurrencyInput
+                label="Saldo inicial"
+                value={form.saldo_inicial}
+                onChange={e => setForm(f => ({ ...f, saldo_inicial: e.target.value }))}
+              />
+              <label className="flex items-center gap-2 cursor-pointer mt-2">
+                <input
+                  type="checkbox"
+                  checked={form.saldo_negativo}
+                  onChange={e => setForm(f => ({ ...f, saldo_negativo: e.target.checked }))}
+                  className="w-4 h-4 accent-red-600"
+                />
+                <span className="text-xs text-slate-600">Conta começa no negativo (vermelho)</span>
+              </label>
+              {form.saldo_negativo && form.saldo_inicial && (
+                <p className="text-xs text-red-600 font-semibold mt-1">Saldo inicial: {formatCurrency(-Math.abs(parseFloat(form.saldo_inicial) || 0))}</p>
+              )}
+            </div>
           </div>
           <label className="flex items-center gap-2 cursor-pointer">
             <input
