@@ -67,6 +67,7 @@ export interface ContaReceber {
   conta_bancaria_id?: string | null
   observacoes?: string | null
   anexos?: Anexo[] | null
+  tag_ids?: string[] | null
   empresa_id?: string | null
   created_at: string
   centros_custo?: CentroCusto

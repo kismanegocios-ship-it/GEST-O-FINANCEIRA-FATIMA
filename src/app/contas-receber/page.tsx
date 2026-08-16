@@ -13,15 +13,18 @@ import { TableWrapper, CardList, MobileCard } from '@/components/ui/table-mobile
 import { CurrencyInput } from '@/components/ui/currency-input'
 import { toast } from 'sonner'
 import {
-  Plus, Search, CheckCircle, Trash2, Pencil, DollarSign, RotateCcw, FileDown,
+  Plus, Search, CheckCircle, Trash2, Pencil, DollarSign, RotateCcw, FileDown, Check, Columns3,
 } from 'lucide-react'
-import type { ContaReceber, CentroCusto, Categoria, ContaBancaria, Anexo } from '@/lib/types'
+import type { ContaReceber, CentroCusto, Categoria, ContaBancaria, Anexo, Tag } from '@/lib/types'
 import { format, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns'
 import { fetchAllRows } from '@/lib/fetch-all'
 import { useEmpresa } from '@/lib/empresa'
+import { useTags } from '@/lib/use-tags'
 import { AnexosManager } from '@/components/anexos'
 import { subirAnexos } from '@/lib/anexos'
 import { Paperclip } from 'lucide-react'
+
+const TAG_CORES = ['#6366f1', '#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#f472b6', '#06b6d4', '#84cc16', '#14b8a6', '#64748b', '#eab308']
 
 const STATUS_OPTIONS = ['todos', 'pendente', 'recebido', 'vencido', 'cancelado']
 const statusVariant: Record<string, 'warning' | 'success' | 'danger' | 'neutral'> = {
@@ -34,9 +37,9 @@ const statusLabel: Record<string, string> = {
 interface FormData {
   descricao: string; valor: string; data_vencimento: string
   centro_custo_id: string; categoria_id: string; observacoes: string
-  parcelado: boolean; num_parcelas: string
+  parcelado: boolean; num_parcelas: string; tag_ids: string[]
 }
-const emptyForm: FormData = { descricao: '', valor: '', data_vencimento: '', centro_custo_id: '', categoria_id: '', observacoes: '', parcelado: false, num_parcelas: '2' }
+const emptyForm: FormData = { descricao: '', valor: '', data_vencimento: '', centro_custo_id: '', categoria_id: '', observacoes: '', parcelado: false, num_parcelas: '2', tag_ids: [] }
 
 export default function ContasReceberPage() {
   const [itens, setItens] = useState<ContaReceber[]>([])
@@ -50,10 +53,16 @@ export default function ContasReceberPage() {
   const [saving, setSaving] = useState(false)
   const [busca, setBusca] = useState('')
   const [filtroStatus, setFiltroStatus] = useState('todos')
-  const [filtroCentro, setFiltroCentro] = useState('')
+  const [filtroCentros, setFiltroCentros] = useState<Set<string>>(new Set())
+  const [centroMenuOpen, setCentroMenuOpen] = useState(false)
   const [perIni, setPerIni] = useState('')
   const [perFim, setPerFim] = useState('')
   const { empresaId, empresa, loading: empLoading } = useEmpresa()
+  const { tags, criar: criarTag, renomear: renomearTag, excluir: excluirTag } = useTags(empresaId)
+  const [filtroTags, setFiltroTags] = useState<Set<string>>(new Set())
+  const [gerenciarTags, setGerenciarTags] = useState(false)
+  const [novaTagNome, setNovaTagNome] = useState('')
+  const [novaTagCor, setNovaTagCor] = useState('#6366f1')
   const [modalAnexos, setModalAnexos] = useState<Anexo[]>([])
   const [stagedAnexos, setStagedAnexos] = useState<File[]>([])
 
@@ -102,9 +111,21 @@ export default function ContasReceberPage() {
     setForm({
       descricao: c.descricao, valor: String(c.valor), data_vencimento: c.data_vencimento,
       centro_custo_id: c.centro_custo_id ?? '', categoria_id: c.categoria_id ?? '', observacoes: c.observacoes ?? '',
-      parcelado: false, num_parcelas: '2',
+      parcelado: false, num_parcelas: '2', tag_ids: c.tag_ids ?? [],
     })
     setModalOpen(true)
+  }
+
+  const toggleSetItem = (setter: React.Dispatch<React.SetStateAction<Set<string>>>, id: string) => {
+    setter(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  }
+  const tagById = (id: string): Tag | undefined => tags.find(t => t.id === id)
+  const toggleTagForm = (id: string) => setForm(f => ({ ...f, tag_ids: f.tag_ids.includes(id) ? f.tag_ids.filter(x => x !== id) : [...f.tag_ids, id] }))
+  const salvarNovaTag = async () => {
+    if (!novaTagNome.trim()) { toast.error('Informe o nome da tag'); return }
+    const ok = await criarTag(novaTagNome.trim(), novaTagCor)
+    if (!ok) { toast.error('Erro ao criar tag'); return }
+    setNovaTagNome(''); setNovaTagCor('#6366f1'); toast.success('Tag criada!')
   }
 
   const salvar = async () => {
@@ -123,6 +144,7 @@ export default function ContasReceberPage() {
         centro_custo_id: form.centro_custo_id || null,
         categoria_id: form.categoria_id || null,
         observacoes: form.observacoes || null,
+        tag_ids: form.tag_ids.length > 0 ? form.tag_ids : null,
         ...(empresaId ? { empresa_id: empresaId } : {}),
       }))
       const { error } = await supabase.from('contas_receber').insert(registros)
@@ -137,6 +159,7 @@ export default function ContasReceberPage() {
       descricao: form.descricao, valor: parseFloat(form.valor), data_vencimento: form.data_vencimento,
       centro_custo_id: form.centro_custo_id || null, categoria_id: form.categoria_id || null,
       observacoes: form.observacoes || null,
+      tag_ids: form.tag_ids.length > 0 ? form.tag_ids : null,
       ...(empresaId && !editando ? { empresa_id: empresaId } : {}),
     }
     // Registro novo com anexos escolhidos → insere pegando o id pra enviar os arquivos
@@ -205,8 +228,9 @@ export default function ContasReceberPage() {
     const ms = filtroStatus === 'todos' || c.status === filtroStatus
     const dv = c.data_vencimento ?? ''
     const mm = (perIni === '' || dv >= perIni) && (perFim === '' || dv <= perFim)
-    const mcc = !filtroCentro || c.centro_custo_id === filtroCentro
-    return mb && ms && mm && mcc
+    const mcc = filtroCentros.size === 0 || (!!c.centro_custo_id && filtroCentros.has(c.centro_custo_id))
+    const mt = filtroTags.size === 0 || (c.tag_ids ?? []).some(id => filtroTags.has(id))
+    return mb && ms && mm && mcc && mt
   })
 
   const totais = {
@@ -250,7 +274,8 @@ export default function ContasReceberPage() {
     const maxContrato = Math.max(...contratos.map(c => c.total), 1)
 
     const escopo = [
-      filtroCentro ? `Contrato: ${centros.find(c => c.id === filtroCentro)?.nome ?? ''}` : '',
+      filtroCentros.size > 0 ? `Contratos: ${centros.filter(c => filtroCentros.has(c.id)).map(c => c.nome).join(', ')}` : '',
+      filtroTags.size > 0 ? `Tags: ${tags.filter(t => filtroTags.has(t.id)).map(t => t.nome).join(', ')}` : '',
       (perIni || perFim) ? `Previsao: ${perIni ? formatDate(perIni) : '...'} a ${perFim ? formatDate(perFim) : '...'}` : '',
       filtroStatus !== 'todos' ? `Status: ${statusLabel[filtroStatus]}` : '',
       busca ? `Busca: "${busca}"` : '',
@@ -425,18 +450,70 @@ export default function ContasReceberPage() {
             <button onClick={() => { setPerIni(''); setPerFim('') }} className={`px-2.5 py-2 rounded-xl text-xs font-medium transition-all ${!perIni && !perFim ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Todos</button>
           </div>
         </div>
-        {/* Filtro por centro de custo (contrato/projeto) */}
+        {/* Filtro por contrato/centro (multi-selecao) */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-slate-400 font-medium">Contrato / Centro:</span>
-          <select
-            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 max-w-[70%]"
-            value={filtroCentro}
-            onChange={e => setFiltroCentro(e.target.value)}
-          >
-            <option value="">Todos os contratos/centros</option>
-            {centros.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-          </select>
-          {filtroCentro && <button onClick={() => setFiltroCentro('')} className="px-2.5 py-2 rounded-xl text-xs font-medium text-slate-500 hover:bg-slate-100">Limpar</button>}
+          <div className="relative">
+            <button
+              onClick={() => setCentroMenuOpen(o => !o)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm transition-all ${filtroCentros.size > 0 ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'}`}
+            >
+              {filtroCentros.size > 0 ? `${filtroCentros.size} contrato(s)` : 'Todos os contratos/centros'}
+              <Columns3 size={13} className="opacity-60" />
+            </button>
+            {centroMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setCentroMenuOpen(false)} />
+                <div className="absolute left-0 mt-1 z-20 bg-white border border-slate-200 rounded-xl shadow-lg p-1.5 w-64 max-h-72 overflow-y-auto">
+                  <div className="flex items-center justify-between px-2 py-1">
+                    <span className="text-[10px] font-semibold text-slate-400 uppercase">Contratos / centros</span>
+                    {filtroCentros.size > 0 && <button onClick={() => setFiltroCentros(new Set())} className="text-[11px] text-indigo-500 hover:underline">Limpar</button>}
+                  </div>
+                  {centros.length === 0 ? (
+                    <p className="text-xs text-slate-400 px-2 py-2">Nenhum contrato/centro cadastrado</p>
+                  ) : centros.map(c => {
+                    const on = filtroCentros.has(c.id)
+                    return (
+                      <button key={c.id} onClick={() => toggleSetItem(setFiltroCentros, c.id)}
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors text-left">
+                        <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on ? 'bg-indigo-600 border-indigo-600' : 'border-slate-300'}`}>
+                          {on && <Check size={11} className="text-white" />}
+                        </span>
+                        <span className="truncate">{c.nome}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+          {filtroCentros.size > 0 && <button onClick={() => setFiltroCentros(new Set())} className="px-2.5 py-2 rounded-xl text-xs font-medium text-slate-500 hover:bg-slate-100">Limpar</button>}
+        </div>
+
+        {/* Tags */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-slate-400 font-medium">Tags:</span>
+          {tags.length === 0 ? (
+            <span className="text-xs text-slate-400">nenhuma criada</span>
+          ) : tags.map(t => {
+            const on = filtroTags.has(t.id)
+            return (
+              <button key={t.id}
+                onClick={() => setFiltroTags(prev => { const n = new Set(prev); if (n.has(t.id)) n.delete(t.id); else n.add(t.id); return n })}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${on ? 'text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+                style={on ? { background: t.cor, borderColor: t.cor } : { borderColor: t.cor }}
+              >
+                <span className="w-2 h-2 rounded-full" style={{ background: on ? '#fff' : t.cor }} />
+                {t.nome}
+              </button>
+            )
+          })}
+          <button onClick={() => setGerenciarTags(true)} className="px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-500 hover:bg-slate-200 transition-all">
+            + Gerenciar tags
+          </button>
+          {filtroTags.size > 0 && (
+            <button onClick={() => setFiltroTags(new Set())} className="text-xs text-slate-400 hover:text-slate-600">limpar</button>
+          )}
         </div>
       </CardContent></Card>
 
@@ -464,6 +541,13 @@ export default function ContasReceberPage() {
                   <td className="px-6 py-3">
                     <p className="font-medium text-slate-800">{c.descricao}{(c.anexos?.length ?? 0) > 0 && <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-indigo-500 align-middle"><Paperclip size={11} />{c.anexos!.length}</span>}</p>
                     {(c as any).centros_custo?.nome && <p className="text-xs text-slate-400 mt-0.5">{(c as any).centros_custo.nome}</p>}
+                    {(c.tag_ids ?? []).length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {(c.tag_ids ?? []).map(id => { const t = tagById(id); return t ? (
+                          <span key={id} className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold text-white" style={{ background: t.cor }}>{t.nome}</span>
+                        ) : null })}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-slate-600 text-sm">{formatDate(c.data_vencimento)}</td>
                   <td className="px-4 py-3 font-semibold text-green-700">{formatCurrency(Number(c.valor))}</td>
@@ -509,6 +593,13 @@ export default function ContasReceberPage() {
                     <p className={`text-xs font-semibold ${isVencido ? 'text-red-500' : 'text-slate-700'}`}>{formatDate(c.data_vencimento)}</p>
                   </div>
                 </div>
+                {(c.tag_ids ?? []).length > 0 && (
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    {(c.tag_ids ?? []).map(id => { const t = tagById(id); return t ? (
+                      <span key={id} className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold text-white" style={{ background: t.cor }}>{t.nome}</span>
+                    ) : null })}
+                  </div>
+                )}
                 <div className="flex items-center gap-2 pt-2 border-t border-slate-50">
                   {(isPend || isVencido) && (
                     <button onClick={() => { setModalReceber(c); setDataRecebimento(format(new Date(), 'yyyy-MM-dd')); setRecContaId(''); setRecForma('pix') }} className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-green-100 text-green-700 rounded-xl text-xs font-semibold hover:bg-green-200 transition-colors"><CheckCircle size={13} /> Dar baixa</button>
@@ -585,6 +676,32 @@ export default function ContasReceberPage() {
             <label className="block text-xs font-medium text-slate-600 mb-1.5">Observacoes</label>
             <textarea className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/30" rows={2} value={form.observacoes} onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))} />
           </div>
+
+          {/* Tags coloridas */}
+          <div className="col-span-1 sm:col-span-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-medium text-slate-600">Tags</label>
+              <button type="button" onClick={() => setGerenciarTags(true)} className="text-xs text-indigo-600 hover:underline">+ Criar/gerenciar</button>
+            </div>
+            {tags.length === 0 ? (
+              <p className="text-xs text-slate-400">Nenhuma tag ainda. Clique em &quot;Criar/gerenciar&quot; para adicionar.</p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {tags.map(t => {
+                  const on = form.tag_ids.includes(t.id)
+                  return (
+                    <button key={t.id} type="button" onClick={() => toggleTagForm(t.id)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${on ? 'text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+                      style={on ? { background: t.cor, borderColor: t.cor } : { borderColor: t.cor }}>
+                      <span className="w-2 h-2 rounded-full" style={{ background: on ? '#fff' : t.cor }} />
+                      {t.nome}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
           {!(form.parcelado && !editando) && (
             <div className="col-span-1 sm:col-span-2">
               <label className="block text-xs font-medium text-slate-600 mb-1.5">Anexos (comprovantes)</label>
@@ -635,6 +752,42 @@ export default function ContasReceberPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Modal Gerenciar Tags */}
+      <Modal open={gerenciarTags} onClose={() => setGerenciarTags(false)} title="Tags" size="sm">
+        <div className="space-y-4">
+          {/* Criar nova */}
+          <div className="bg-slate-50 rounded-xl p-3 space-y-2.5">
+            <p className="text-xs font-semibold text-slate-500 uppercase">Nova tag</p>
+            <Input placeholder="Nome da tag (ex: Tres Coracoes, Recorrente...)" value={novaTagNome} onChange={e => setNovaTagNome(e.target.value)} />
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {TAG_CORES.map(cor => (
+                <button key={cor} type="button" onClick={() => setNovaTagCor(cor)}
+                  className={`w-7 h-7 rounded-lg transition-all ${novaTagCor === cor ? 'ring-2 ring-offset-2 ring-slate-400 scale-110' : ''}`}
+                  style={{ background: cor }} />
+              ))}
+            </div>
+            <Button onClick={salvarNovaTag} size="sm" className="w-full"><Plus size={14} /> Criar tag</Button>
+          </div>
+
+          {/* Lista existentes */}
+          <div className="space-y-1.5 max-h-64 overflow-y-auto">
+            {tags.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-3">Nenhuma tag criada ainda</p>
+            ) : tags.map(t => (
+              <div key={t.id} className="flex items-center gap-2 p-2 rounded-xl bg-white border border-slate-100">
+                <input type="color" value={t.cor} onChange={e => renomearTag(t.id, t.nome, e.target.value)} className="w-7 h-7 rounded cursor-pointer border-0 bg-transparent p-0" title="Trocar cor" />
+                <input
+                  className="flex-1 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                  defaultValue={t.nome}
+                  onBlur={e => { if (e.target.value.trim() && e.target.value !== t.nome) renomearTag(t.id, e.target.value.trim(), t.cor) }}
+                />
+                <button onClick={async () => { if (confirm(`Excluir a tag "${t.nome}"?`)) { await excluirTag(t.id); setFiltroTags(prev => { const n = new Set(prev); n.delete(t.id); return n }) } }} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400" title="Excluir"><Trash2 size={14} /></button>
+              </div>
+            ))}
+          </div>
+        </div>
       </Modal>
     </div>
   )

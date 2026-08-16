@@ -42,6 +42,7 @@ export default function Dashboard() {
   const [entradasPrev, setEntradasPrev] = useState(0)
   const [saidasPrev, setSaidasPrev] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [mesRef, setMesRef] = useState(() => new Date())
   const { empresaId, loading: empLoading } = useEmpresa()
 
   useEffect(() => {
@@ -50,8 +51,9 @@ export default function Dashboard() {
       const esc = <T,>(q: T): T => (empresaId ? (q as any).eq('empresa_id', empresaId) : q)
       const hoje = new Date()
       const hojeStr = format(hoje, 'yyyy-MM-dd')
-      const inicioMes = format(startOfMonth(hoje), 'yyyy-MM-dd')
-      const fimMes = format(endOfMonth(hoje), 'yyyy-MM-dd')
+      // Mes de referencia escolhido no topo (entradas/saidas/a pagar/a receber/graficos)
+      const inicioMes = format(startOfMonth(mesRef), 'yyyy-MM-dd')
+      const fimMes = format(endOfMonth(mesRef), 'yyyy-MM-dd')
 
       // Auto-vencimento: pendentes com data anterior a hoje → vencido (so da empresa atual)
       await esc(supabase
@@ -103,8 +105,8 @@ export default function Dashboard() {
       setSaldoCaixa(saldoInicialTotal + deltaTotal)
       setSaldosBanco(contas.map(c => ({ nome: c.nome, saldo: Number(c.saldo_inicial) + (deltaPorConta[c.id] ?? 0) })).sort((a, b) => b.saldo - a.saldo))
 
-      // Mes anterior (para variacao %)
-      const mAnt = subMonths(hoje, 1)
+      // Mes anterior (para variacao %) — relativo ao mes de referencia
+      const mAnt = subMonths(mesRef, 1)
       const { data: lancPrev } = await esc(supabase.from('lancamentos').select('tipo, valor')
         .gte('data', format(startOfMonth(mAnt), 'yyyy-MM-dd')).lte('data', format(endOfMonth(mAnt), 'yyyy-MM-dd')))
       setEntradasPrev((lancPrev ?? []).filter((l: any) => l.tipo === 'entrada').reduce((s: number, l: any) => s + Number(l.valor), 0))
@@ -112,7 +114,7 @@ export default function Dashboard() {
 
       const meses: ResumoMes[] = []
       for (let i = 5; i >= 0; i--) {
-        const m = subMonths(hoje, i)
+        const m = subMonths(mesRef, i)
         const ini = format(startOfMonth(m), 'yyyy-MM-dd')
         const fim = format(endOfMonth(m), 'yyyy-MM-dd')
         const { data } = await esc(supabase.from('lancamentos').select('tipo, valor').gte('data', ini).lte('data', fim))
@@ -136,7 +138,7 @@ export default function Dashboard() {
       setLoading(false)
     }
     load()
-  }, [empresaId, empLoading])
+  }, [empresaId, empLoading, mesRef])
 
   const saldo = totalEntradas - totalSaidas
 
@@ -150,11 +152,26 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          {format(new Date(), "MMMM 'de' yyyy", { locale: ptBR })} &middot; Visao geral financeira
-        </p>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            {format(mesRef, "MMMM 'de' yyyy", { locale: ptBR })} &middot; Visao geral financeira
+          </p>
+        </div>
+        {/* Seletor de mes */}
+        <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
+          <button onClick={() => setMesRef(m => subMonths(m, 1))} className="w-8 h-8 rounded-lg hover:bg-slate-100 text-slate-500 flex items-center justify-center" title="Mes anterior">
+            <ArrowRight size={16} className="rotate-180" />
+          </button>
+          <span className="text-sm font-semibold text-slate-700 capitalize min-w-32 text-center">{format(mesRef, "MMMM 'de' yyyy", { locale: ptBR })}</span>
+          <button onClick={() => setMesRef(m => subMonths(m, -1))} className="w-8 h-8 rounded-lg hover:bg-slate-100 text-slate-500 flex items-center justify-center" title="Proximo mes">
+            <ArrowRight size={16} />
+          </button>
+          {format(mesRef, 'yyyy-MM') !== format(new Date(), 'yyyy-MM') && (
+            <button onClick={() => setMesRef(new Date())} className="ml-1 px-2.5 h-8 rounded-lg bg-indigo-50 text-indigo-600 text-xs font-medium hover:bg-indigo-100">Hoje</button>
+          )}
+        </div>
       </div>
 
       {/* Hero: Saldo em caixa + Entradas/Saidas/Resultado do mes */}
