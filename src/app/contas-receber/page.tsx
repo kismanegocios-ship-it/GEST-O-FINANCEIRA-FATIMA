@@ -13,7 +13,7 @@ import { TableWrapper, CardList, MobileCard } from '@/components/ui/table-mobile
 import { CurrencyInput } from '@/components/ui/currency-input'
 import { toast } from 'sonner'
 import {
-  Plus, Search, CheckCircle, Trash2, Pencil, DollarSign, RotateCcw,
+  Plus, Search, CheckCircle, Trash2, Pencil, DollarSign, RotateCcw, FileDown,
 } from 'lucide-react'
 import type { ContaReceber, CentroCusto, Categoria, ContaBancaria, Anexo } from '@/lib/types'
 import { format, startOfMonth, endOfMonth, subMonths, startOfYear, endOfYear } from 'date-fns'
@@ -49,9 +49,10 @@ export default function ContasReceberPage() {
   const [saving, setSaving] = useState(false)
   const [busca, setBusca] = useState('')
   const [filtroStatus, setFiltroStatus] = useState('todos')
+  const [filtroCentro, setFiltroCentro] = useState('')
   const [perIni, setPerIni] = useState('')
   const [perFim, setPerFim] = useState('')
-  const { empresaId } = useEmpresa()
+  const { empresaId, empresa } = useEmpresa()
   const [modalAnexos, setModalAnexos] = useState<Anexo[]>([])
   const [stagedAnexos, setStagedAnexos] = useState<File[]>([])
 
@@ -178,13 +179,158 @@ export default function ContasReceberPage() {
     const ms = filtroStatus === 'todos' || c.status === filtroStatus
     const dv = c.data_vencimento ?? ''
     const mm = (perIni === '' || dv >= perIni) && (perFim === '' || dv <= perFim)
-    return mb && ms && mm
+    const mcc = !filtroCentro || c.centro_custo_id === filtroCentro
+    return mb && ms && mm && mcc
   })
 
   const totais = {
     pendente: filtradas.filter(c => c.status === 'pendente').reduce((s, c) => s + Number(c.valor), 0),
     vencido: filtradas.filter(c => c.status === 'vencido').reduce((s, c) => s + Number(c.valor), 0),
     recebido: filtradas.filter(c => c.status === 'recebido').reduce((s, c) => s + Number(c.valor), 0),
+  }
+
+  const escHtml = (s: string) => s.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch] as string))
+
+  // Relatorio por contrato/centro de custo (estilo "resultado do projeto")
+  const exportarPDF = () => {
+    if (filtradas.length === 0) { toast.error('Nenhum recebimento para exportar com os filtros atuais'); return }
+    const geradoEm = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    const nomeEmpresa = escHtml(empresa?.nome ?? 'Sistema Financeiro Fatima')
+    const statusPdf: Record<string, { c: string; bg: string; lbl: string }> = {
+      pendente: { c: '#b45309', bg: '#fef3c7', lbl: 'A receber' },
+      vencido: { c: '#b91c1c', bg: '#fee2e2', lbl: 'Atrasado' },
+      recebido: { c: '#15803d', bg: '#dcfce7', lbl: 'Recebido' },
+      cancelado: { c: '#475569', bg: '#f1f5f9', lbl: 'Cancelado' },
+    }
+
+    const totalGeral = filtradas.reduce((s, c) => s + Number(c.valor), 0)
+    const totRecebido = totais.recebido
+    const totAReceber = totais.pendente + totais.vencido
+
+    // Agrupa por contrato/centro
+    const grupos = new Map<string, ContaReceber[]>()
+    for (const c of filtradas) {
+      const nome = (c as any).centros_custo?.nome ?? 'Sem contrato/centro'
+      const arr = grupos.get(nome); if (arr) arr.push(c); else grupos.set(nome, [c])
+    }
+    const contratos = Array.from(grupos.entries())
+      .map(([nome, itens]) => ({
+        nome, itens,
+        total: itens.reduce((s, c) => s + Number(c.valor), 0),
+        recebido: itens.filter(c => c.status === 'recebido').reduce((s, c) => s + Number(c.valor), 0),
+        aReceber: itens.filter(c => c.status === 'pendente' || c.status === 'vencido').reduce((s, c) => s + Number(c.valor), 0),
+      }))
+      .sort((a, b) => b.total - a.total)
+    const maxContrato = Math.max(...contratos.map(c => c.total), 1)
+
+    const escopo = [
+      filtroCentro ? `Contrato: ${centros.find(c => c.id === filtroCentro)?.nome ?? ''}` : '',
+      (perIni || perFim) ? `Previsao: ${perIni ? formatDate(perIni) : '...'} a ${perFim ? formatDate(perFim) : '...'}` : '',
+      filtroStatus !== 'todos' ? `Status: ${statusLabel[filtroStatus]}` : '',
+      busca ? `Busca: "${busca}"` : '',
+    ].filter(Boolean).map(t => escHtml(t as string)).join(' &nbsp;•&nbsp; ') || 'Todos os contratos'
+
+    const resumoContratos = contratos.map(ct => `<tr>
+      <td><strong>${escHtml(ct.nome)}</strong></td>
+      <td class="num" style="color:#15803d">${formatCurrency(ct.recebido)}</td>
+      <td class="num" style="color:#b45309">${formatCurrency(ct.aReceber)}</td>
+      <td class="num">${formatCurrency(ct.total)}</td>
+      <td style="width:26%"><div class="bar"><span style="width:${(ct.total / maxContrato) * 100}%"></span></div></td>
+    </tr>`).join('')
+
+    const detalhe = contratos.map(ct => `
+      <tr class="grp"><td colspan="5">${escHtml(ct.nome)} — ${formatCurrency(ct.total)} <span class="gsub">(recebido ${formatCurrency(ct.recebido)} • a receber ${formatCurrency(ct.aReceber)})</span></td></tr>
+      ${ct.itens.slice().sort((a, b) => (a.data_vencimento < b.data_vencimento ? -1 : 1)).map(c => {
+        const st = statusPdf[c.status] ?? statusPdf.pendente
+        return `<tr>
+          <td>${escHtml(c.descricao)}</td>
+          <td>${formatDate(c.data_vencimento)}</td>
+          <td>${c.status === 'recebido' && c.data_recebimento ? formatDate(c.data_recebimento) : '—'}</td>
+          <td><span class="pill" style="color:${st.c};background:${st.bg}">${st.lbl}</span></td>
+          <td class="num">${formatCurrency(Number(c.valor))}</td>
+        </tr>`
+      }).join('')}`).join('')
+
+    const html = `
+      <!DOCTYPE html><html lang="pt-BR"><head>
+      <meta charset="UTF-8"><title>Contas a Receber — ${nomeEmpresa}</title>
+      <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, 'Segoe UI', Arial, sans-serif; font-size: 11px; color: #0f172a; margin: 0; padding: 28px 32px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .head { display:flex; justify-content:space-between; align-items:flex-start; padding-bottom:16px; border-bottom:3px solid #2563eb; margin-bottom:18px; }
+        .brand { display:flex; align-items:center; gap:10px; }
+        .logo { width:38px; height:38px; border-radius:10px; background:linear-gradient(135deg,#2563eb,#4f46e5); color:#fff; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:800; }
+        .brand h2 { margin:0; font-size:13px; color:#2563eb; }
+        .brand p { margin:2px 0 0; font-size:10px; color:#64748b; }
+        .head .rt { text-align:right; }
+        .head .rt h1 { margin:0; font-size:20px; }
+        .head .rt p { margin:3px 0 0; font-size:10px; color:#64748b; }
+        .scope { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; font-size:10px; color:#475569; margin-bottom:16px; }
+        .kpis { display:flex; gap:10px; margin-bottom:20px; }
+        .kpi { flex:1; border:1px solid #e2e8f0; border-radius:10px; padding:11px 13px; }
+        .kpi .lbl { font-size:9px; text-transform:uppercase; letter-spacing:.05em; color:#64748b; font-weight:700; }
+        .kpi .val { font-size:15px; font-weight:800; margin-top:3px; }
+        .kpi.k1 { border-left:4px solid #f59e0b; } .kpi.k1 .val { color:#b45309; }
+        .kpi.k2 { border-left:4px solid #22c55e; } .kpi.k2 .val { color:#15803d; }
+        .kpi.k3 { border-left:4px solid #2563eb; background:#eff6ff; } .kpi.k3 .val { color:#1d4ed8; }
+        h3 { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#334155; margin:22px 0 8px; padding-bottom:5px; border-bottom:1px solid #e2e8f0; }
+        table { width:100%; border-collapse:collapse; }
+        th { text-align:left; padding:7px 8px; font-size:9px; text-transform:uppercase; letter-spacing:.04em; color:#64748b; background:#f8fafc; border-bottom:1px solid #e2e8f0; }
+        td { padding:7px 8px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
+        .num { text-align:right; font-weight:600; white-space:nowrap; }
+        .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:9px; font-weight:700; }
+        .bar { background:#eff6ff; border-radius:6px; height:10px; overflow:hidden; }
+        .bar span { display:block; height:10px; background:linear-gradient(90deg,#2563eb,#60a5fa); border-radius:6px; }
+        tr.grp td { background:#eff6ff; font-weight:800; color:#1e3a8a; border-top:2px solid #dbeafe; }
+        tr.grp .gsub { font-weight:500; color:#3b82f6; font-size:10px; }
+        tfoot td { font-weight:800; border-top:2px solid #e2e8f0; background:#f8fafc; }
+        .foot { margin-top:22px; padding-top:10px; border-top:1px solid #e2e8f0; font-size:9px; color:#94a3b8; display:flex; justify-content:space-between; }
+        @media print { body { padding:0; } }
+      </style></head><body>
+      <div class="head">
+        <div class="brand">
+          <div class="logo">${(nomeEmpresa[0] ?? 'F').toUpperCase()}</div>
+          <div><h2>${nomeEmpresa}</h2><p>Gestao Financeira</p></div>
+        </div>
+        <div class="rt">
+          <h1>Contas a Receber</h1>
+          <p>Por contrato / centro de custo • Gerado em ${geradoEm}</p>
+        </div>
+      </div>
+
+      <div class="scope">${escopo} &nbsp;•&nbsp; ${filtradas.length} recebimento(s) • ${contratos.length} contrato(s)</div>
+
+      <div class="kpis">
+        <div class="kpi k1"><div class="lbl">A Receber</div><div class="val">${formatCurrency(totAReceber)}</div></div>
+        <div class="kpi k2"><div class="lbl">Recebido</div><div class="val">${formatCurrency(totRecebido)}</div></div>
+        <div class="kpi k3"><div class="lbl">Total previsto</div><div class="val">${formatCurrency(totalGeral)}</div></div>
+      </div>
+
+      <h3>Resumo por Contrato / Centro de Custo</h3>
+      <table>
+        <thead><tr><th>Contrato / Centro</th><th class="num">Recebido</th><th class="num">A Receber</th><th class="num">Total</th><th>Participacao</th></tr></thead>
+        <tbody>${resumoContratos}</tbody>
+        <tfoot><tr><td>Total geral</td><td class="num">${formatCurrency(totRecebido)}</td><td class="num">${formatCurrency(totAReceber)}</td><td class="num">${formatCurrency(totalGeral)}</td><td></td></tr></tfoot>
+      </table>
+
+      <h3>Detalhamento por Contrato</h3>
+      <table>
+        <thead><tr><th>Descricao</th><th>Previsao</th><th>Recebido em</th><th>Status</th><th class="num">Valor</th></tr></thead>
+        <tbody>${detalhe}</tbody>
+      </table>
+
+      <div class="foot">
+        <span>${nomeEmpresa} • Sistema Financeiro Fatima</span>
+        <span>Documento gerado automaticamente • ${geradoEm}</span>
+      </div>
+      </body></html>`
+
+    const win = window.open('', '_blank')
+    if (!win) { toast.error('Permita popups para exportar PDF'); return }
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+    setTimeout(() => { win.print() }, 400)
   }
 
   return (
@@ -194,7 +340,12 @@ export default function ContasReceberPage() {
           <h1 className="text-xl md:text-2xl font-bold text-slate-800">Contas a Receber</h1>
           <p className="text-xs md:text-sm text-slate-500 mt-0.5">Recebimentos previstos e baixa de entradas</p>
         </div>
-        <Button onClick={abrirNovo} size="sm"><Plus size={15} /> <span className="hidden sm:inline">Novo</span> Recebimento</Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={exportarPDF} size="sm" title="Relatorio por contrato/centro (PDF)">
+            <FileDown size={15} /> <span className="hidden sm:inline">PDF</span>
+          </Button>
+          <Button onClick={abrirNovo} size="sm"><Plus size={15} /> <span className="hidden sm:inline">Novo</span> Recebimento</Button>
+        </div>
       </div>
 
       {/* Cards resumo */}
@@ -247,6 +398,19 @@ export default function ContasReceberPage() {
             ))}
             <button onClick={() => { setPerIni(''); setPerFim('') }} className={`px-2.5 py-2 rounded-xl text-xs font-medium transition-all ${!perIni && !perFim ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Todos</button>
           </div>
+        </div>
+        {/* Filtro por centro de custo (contrato/projeto) */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-slate-400 font-medium">Contrato / Centro:</span>
+          <select
+            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 max-w-[70%]"
+            value={filtroCentro}
+            onChange={e => setFiltroCentro(e.target.value)}
+          >
+            <option value="">Todos os contratos/centros</option>
+            {centros.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+          </select>
+          {filtroCentro && <button onClick={() => setFiltroCentro('')} className="px-2.5 py-2 rounded-xl text-xs font-medium text-slate-500 hover:bg-slate-100">Limpar</button>}
         </div>
       </CardContent></Card>
 
