@@ -69,7 +69,8 @@ export default function LancamentosPage() {
   const [filtroTipo, setFiltroTipo] = useState<'todos' | 'entrada' | 'saida'>('todos')
   const [filtroCentros, setFiltroCentros] = useState<Set<string>>(new Set())
   const [filtroCategorias, setFiltroCategorias] = useState<Set<string>>(new Set())
-  const [filtroConta, setFiltroConta] = useState('')
+  const [filtroContas, setFiltroContas] = useState<Set<string>>(new Set())
+  const [contaMenuOpen, setContaMenuOpen] = useState(false)
   // Periodo (De/Ate) — padrao: mes atual
   const [dataIni, setDataIni] = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'))
   const [dataFim, setDataFim] = useState(format(endOfMonth(new Date()), 'yyyy-MM-dd'))
@@ -283,7 +284,7 @@ export default function LancamentosPage() {
     const nomesCentros = centros.filter(c => filtroCentros.has(c.id)).map(c => c.nome)
     const nomesCategorias = categorias.filter(c => filtroCategorias.has(c.id)).map(c => c.nome)
     const escopo = [
-      filtroConta ? `Conta: ${contas.find(c => c.id === filtroConta)?.nome ?? ''}` : '',
+      filtroContas.size > 0 ? `Contas: ${contas.filter(c => filtroContas.has(c.id)).map(c => c.nome).join(', ')}` : '',
       nomesCentros.length > 0 ? `Centros: ${nomesCentros.join(', ')}` : '',
       nomesCategorias.length > 0 ? `Categorias: ${nomesCategorias.join(', ')}` : '',
       filtroTipo !== 'todos' ? `Tipo: ${filtroTipo === 'entrada' ? 'Entradas' : 'Saidas'}` : '',
@@ -401,7 +402,7 @@ export default function LancamentosPage() {
   const matchEscopo = (l: { centro_custo_id?: string | null; categoria_id?: string | null; conta_bancaria_id?: string | null }) =>
     (filtroCentros.size === 0 || (!!l.centro_custo_id && filtroCentros.has(l.centro_custo_id))) &&
     (filtroCategorias.size === 0 || (!!l.categoria_id && filtroCategorias.has(l.categoria_id))) &&
-    (!filtroConta || l.conta_bancaria_id === filtroConta)
+    (filtroContas.size === 0 || (!!l.conta_bancaria_id && filtroContas.has(l.conta_bancaria_id)))
 
   const filtrados = lancamentos.filter(l => {
     const matchBusca = l.descricao.toLowerCase().includes(busca.toLowerCase())
@@ -418,7 +419,7 @@ export default function LancamentosPage() {
   // anteriores ao mes que batem com o escopo filtrado.
   const saldoInicialContas = (filtroCentros.size === 0 && filtroCategorias.size === 0)
     ? contas
-        .filter(c => !filtroConta || c.id === filtroConta)
+        .filter(c => filtroContas.size === 0 || filtroContas.has(c.id))
         .reduce((s, c) => s + Number(c.saldo_inicial), 0)
     : 0
   const priorDelta = priorLancs
@@ -552,14 +553,39 @@ export default function LancamentosPage() {
 
           {/* Escopo do extrato: conta, centro de custo, categoria + colunas */}
           <div className="flex gap-2 flex-wrap items-center">
-            <select
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 max-w-[48%] sm:max-w-none"
-              value={filtroConta}
-              onChange={e => setFiltroConta(e.target.value)}
-            >
-              <option value="">Todas as contas</option>
-              {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
-            </select>
+            {/* Contas (multi) */}
+            <div className="relative">
+              <button
+                onClick={() => setContaMenuOpen(o => !o)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm transition-all ${filtroContas.size > 0 ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'}`}
+              >
+                {filtroContas.size > 0 ? `${filtroContas.size} conta(s)` : 'Todas as contas'}
+                <Columns3 size={13} className="opacity-60" />
+              </button>
+              {contaMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setContaMenuOpen(false)} />
+                  <div className="absolute left-0 mt-1 z-20 bg-white border border-slate-200 rounded-xl shadow-lg p-1.5 w-56 max-h-72 overflow-y-auto">
+                    <div className="flex items-center justify-between px-2 py-1">
+                      <span className="text-[10px] font-semibold text-slate-400 uppercase">Contas bancarias</span>
+                      {filtroContas.size > 0 && <button onClick={() => setFiltroContas(new Set())} className="text-[11px] text-indigo-500 hover:underline">Limpar</button>}
+                    </div>
+                    {contas.map(c => {
+                      const on = filtroContas.has(c.id)
+                      return (
+                        <button key={c.id} onClick={() => toggleSetItem(setFiltroContas, c.id)}
+                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors text-left">
+                          <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on ? 'bg-indigo-600 border-indigo-600' : 'border-slate-300'}`}>
+                            {on && <Check size={11} className="text-white" />}
+                          </span>
+                          <span className="truncate">{c.nome}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
             {/* Centros de custo (multi) */}
             <div className="relative">
               <button
@@ -628,9 +654,9 @@ export default function LancamentosPage() {
               )}
             </div>
 
-            {(filtroConta || filtroCentros.size > 0 || filtroCategorias.size > 0) && (
+            {(filtroContas.size > 0 || filtroCentros.size > 0 || filtroCategorias.size > 0) && (
               <button
-                onClick={() => { setFiltroConta(''); setFiltroCentros(new Set()); setFiltroCategorias(new Set()) }}
+                onClick={() => { setFiltroContas(new Set()); setFiltroCentros(new Set()); setFiltroCategorias(new Set()) }}
                 className="px-2.5 py-2 rounded-xl text-xs font-medium text-slate-500 hover:bg-slate-100 transition-all"
               >
                 Limpar

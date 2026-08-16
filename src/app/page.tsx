@@ -61,7 +61,7 @@ export default function Dashboard() {
 
       const [lanc, desp, lancRecentes, despVencendo] = await Promise.all([
         esc(supabase.from('lancamentos').select('*').gte('data', inicioMes).lte('data', fimMes)),
-        esc(supabase.from('despesas').select('*').in('status', ['pendente', 'vencido'])),
+        esc(supabase.from('despesas').select('*').in('status', ['pendente', 'vencido']).lte('data_vencimento', fimMes)),
         esc(supabase.from('lancamentos').select('*, centros_custo(*), categorias(*)').order('data', { ascending: false }).limit(5)),
         esc(supabase.from('despesas').select('*, centros_custo(*), categorias(*)').eq('status', 'pendente').gte('data_vencimento', format(hoje, 'yyyy-MM-dd')).order('data_vencimento', { ascending: true }).limit(5)),
       ])
@@ -80,8 +80,8 @@ export default function Dashboard() {
       setUltimosLancamentos((lancRecentes.data ?? []) as Lancamento[])
       setProximasVencendo((despVencendo.data ?? []) as Despesa[])
 
-      // A receber (pendente + vencido)
-      const { data: recData } = await esc(supabase.from('contas_receber').select('valor').in('status', ['pendente', 'vencido']))
+      // A receber (pendente + vencido) — apenas ate o fim do mes atual
+      const { data: recData } = await esc(supabase.from('contas_receber').select('valor').in('status', ['pendente', 'vencido']).lte('data_vencimento', fimMes))
       setAReceber((recData ?? []).reduce((s: number, r: any) => s + Number(r.valor), 0))
 
       // Saldo em caixa REAL: saldo inicial das contas + todos os lancamentos (paginado)
@@ -168,9 +168,9 @@ export default function Dashboard() {
             <p className="text-indigo-200 text-xs mt-1">Saldo inicial + todas as movimentacoes</p>
           </div>
           <div className="flex items-center gap-4 mt-4 pt-3 border-t border-white/20 text-xs">
-            <div><span className="text-indigo-200">A pagar</span><p className="font-bold text-sm">{formatCurrency(aPagar)}</p></div>
-            <div><span className="text-indigo-200">A receber</span><p className="font-bold text-sm">{formatCurrency(aReceber)}</p></div>
-            <div><span className="text-indigo-200">Projetado</span><p className="font-bold text-sm">{formatCurrency(saldoCaixa - aPagar + aReceber)}</p></div>
+            <div><span className="text-indigo-200">A pagar (mes)</span><p className="font-bold text-sm">{formatCurrency(aPagar)}</p></div>
+            <div><span className="text-indigo-200">A receber (mes)</span><p className="font-bold text-sm">{formatCurrency(aReceber)}</p></div>
+            <div><span className="text-indigo-200">Projetado (mes)</span><p className="font-bold text-sm">{formatCurrency(saldoCaixa - aPagar + aReceber)}</p></div>
           </div>
         </div>
 
