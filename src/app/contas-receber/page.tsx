@@ -33,6 +33,10 @@ const statusVariant: Record<string, 'warning' | 'success' | 'danger' | 'neutral'
 const statusLabel: Record<string, string> = {
   pendente: 'A Receber', recebido: 'Recebido', vencido: 'Vencido', cancelado: 'Cancelado',
 }
+const formaLabel: Record<string, string> = {
+  pix: 'PIX', transferencia: 'Transferencia', boleto: 'Boleto', dinheiro: 'Dinheiro',
+  cartao_debito: 'Cartao Debito', cartao_credito: 'Cartao Credito',
+}
 
 interface FormData {
   descricao: string; valor: string; data_vencimento: string
@@ -65,6 +69,11 @@ export default function ContasReceberPage() {
   const [novaTagCor, setNovaTagCor] = useState('#6366f1')
   const [modalAnexos, setModalAnexos] = useState<Anexo[]>([])
   const [stagedAnexos, setStagedAnexos] = useState<File[]>([])
+  // Detalhes ao clicar (com preview de anexos)
+  const [detalhe, setDetalhe] = useState<ContaReceber | null>(null)
+  const [detalheLanc, setDetalheLanc] = useState<{ conta?: string; forma?: string; data?: string; valor?: number } | null>(null)
+  // Exclusao de parcela (perguntar: todas ou so esta)
+  const [excluirAlvo, setExcluirAlvo] = useState<ContaReceber | null>(null)
 
   // Modal de baixa (receber)
   const [modalReceber, setModalReceber] = useState<ContaReceber | null>(null)
@@ -128,6 +137,35 @@ export default function ContasReceberPage() {
     setNovaTagNome(''); setNovaTagCor('#6366f1'); toast.success('Tag criada!')
   }
 
+  // ── Parcelas: agrupa pela descricao base "(x/y)" + mesmo contrato/centro ──
+  const parcelaInfo = (descricao: string) => {
+    const m = descricao.match(/^(.*)\s\((\d+)\/(\d+)\)\s*$/)
+    return m ? { base: m[1], idx: Number(m[2]), total: Number(m[3]) } : null
+  }
+  // Retorna todas as parcelas irmas (inclui a propria) do mesmo parcelamento
+  const irmasParcela = (c: ContaReceber): ContaReceber[] => {
+    const info = parcelaInfo(c.descricao)
+    if (!info) return [c]
+    return itens.filter(x => {
+      const i2 = parcelaInfo(x.descricao)
+      return i2 && i2.base === info.base && i2.total === info.total && (x.centro_custo_id ?? '') === (c.centro_custo_id ?? '')
+    })
+  }
+
+  // Abre o painel de detalhes ao clicar. Se ja foi recebido, busca o
+  // lancamento vinculado pra mostrar quando/onde/como entrou no caixa.
+  const abrirDetalhe = async (c: ContaReceber) => {
+    setDetalhe(c)
+    setDetalheLanc(null)
+    if (c.status === 'recebido') {
+      const { data } = await supabase.from('lancamentos')
+        .select('valor, data, forma_pagamento, contas_bancarias(nome)')
+        .eq('conta_receber_id', c.id).order('data', { ascending: false }).limit(1)
+      const l = (data ?? [])[0] as any
+      if (l) setDetalheLanc({ conta: l.contas_bancarias?.nome, forma: l.forma_pagamento, data: l.data, valor: Number(l.valor) })
+    }
+  }
+
   const salvar = async () => {
     if (!form.descricao || !form.valor || !form.data_vencimento) { toast.error('Preencha os campos obrigatorios'); return }
     setSaving(true)
@@ -172,12 +210,33 @@ export default function ContasReceberPage() {
       setModalOpen(false); setForm(emptyForm); setStagedAnexos([]); load()
       return
     }
+    // Editando uma parcela e mudou o valor? Pergunta se aplica as outras parcelas.
+    let irmasParaAtualizar: string[] = []
+    if (editando) {
+      const novoValor = parseFloat(form.valor)
+      if (novoValor !== Number(editando.valor)) {
+        const irmas = irmasParcela(editando).filter(x => x.id !== editando.id)
+        if (irmas.length > 0) {
+          const aplicar = confirm(
+            `Esta conta faz parte de um parcelamento (${irmas.length + 1} parcelas).\n\n` +
+            `Aplicar o novo valor ${formatCurrency(novoValor)} a TODAS as parcelas?\n\n` +
+            `OK = todas as parcelas   •   Cancelar = somente esta`
+          )
+          if (aplicar) irmasParaAtualizar = irmas.map(x => x.id)
+        }
+      }
+    }
+
     const { error } = editando
       ? await supabase.from('contas_receber').update(payload).eq('id', editando.id)
       : await supabase.from('contas_receber').insert(payload)
+    if (error) { setSaving(false); toast.error('Erro ao salvar: ' + error.message); return }
+    if (irmasParaAtualizar.length > 0) {
+      const { error: e2 } = await supabase.from('contas_receber').update({ valor: parseFloat(form.valor) }).in('id', irmasParaAtualizar)
+      if (e2) { setSaving(false); toast.error('Conta salva, mas erro nas outras parcelas: ' + e2.message); return }
+    }
     setSaving(false)
-    if (error) { toast.error('Erro ao salvar: ' + error.message); return }
-    toast.success(editando ? 'Atualizado!' : 'Conta a receber cadastrada!')
+    toast.success(editando ? (irmasParaAtualizar.length > 0 ? `Valor aplicado a ${irmasParaAtualizar.length + 1} parcelas!` : 'Atualizado!') : 'Conta a receber cadastrada!')
     setModalOpen(false); setForm(emptyForm); load()
   }
 
@@ -217,10 +276,27 @@ export default function ContasReceberPage() {
     load()
   }
 
-  const excluir = async (id: string) => {
+  const excluir = async (c: ContaReceber) => {
+    const irmas = irmasParcela(c)
+    // Faz parte de um parcelamento → abre modal perguntando todas ou so esta
+    if (irmas.length > 1) { setExcluirAlvo(c); return }
     if (!confirm('Excluir esta conta a receber?')) return
-    await supabase.from('contas_receber').delete().eq('id', id)
+    await supabase.from('contas_receber').delete().eq('id', c.id)
     toast.success('Excluida'); load()
+  }
+
+  // Acoes do modal de exclusao de parcela
+  const excluirSomenteEsta = async () => {
+    if (!excluirAlvo) return
+    await supabase.from('contas_receber').delete().eq('id', excluirAlvo.id)
+    setExcluirAlvo(null); toast.success('Parcela excluida'); load()
+  }
+  const excluirTodasParcelas = async () => {
+    if (!excluirAlvo) return
+    const ids = irmasParcela(excluirAlvo).map(x => x.id)
+    const { error } = await supabase.from('contas_receber').delete().in('id', ids)
+    if (error) { toast.error('Erro ao excluir: ' + error.message); return }
+    setExcluirAlvo(null); toast.success(`${ids.length} parcelas excluidas`); load()
   }
 
   const filtradas = itens.filter(c => {
@@ -539,15 +615,17 @@ export default function ContasReceberPage() {
               ) : filtradas.map(c => (
                 <tr key={c.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-6 py-3">
-                    <p className="font-medium text-slate-800">{c.descricao}{(c.anexos?.length ?? 0) > 0 && <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-indigo-500 align-middle"><Paperclip size={11} />{c.anexos!.length}</span>}</p>
-                    {(c as any).centros_custo?.nome && <p className="text-xs text-slate-400 mt-0.5">{(c as any).centros_custo.nome}</p>}
-                    {(c.tag_ids ?? []).length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {(c.tag_ids ?? []).map(id => { const t = tagById(id); return t ? (
-                          <span key={id} className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold text-white" style={{ background: t.cor }}>{t.nome}</span>
-                        ) : null })}
-                      </div>
-                    )}
+                    <button onClick={() => abrirDetalhe(c)} className="text-left group/desc">
+                      <p className="font-medium text-slate-800 group-hover/desc:text-indigo-600 transition-colors">{c.descricao}{(c.anexos?.length ?? 0) > 0 && <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-indigo-500 align-middle"><Paperclip size={11} />{c.anexos!.length}</span>}</p>
+                      {(c as any).centros_custo?.nome && <p className="text-xs text-slate-400 mt-0.5">{(c as any).centros_custo.nome}</p>}
+                      {(c.tag_ids ?? []).length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {(c.tag_ids ?? []).map(id => { const t = tagById(id); return t ? (
+                            <span key={id} className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold text-white" style={{ background: t.cor }}>{t.nome}</span>
+                          ) : null })}
+                        </div>
+                      )}
+                    </button>
                   </td>
                   <td className="px-4 py-3 text-slate-600 text-sm">{formatDate(c.data_vencimento)}</td>
                   <td className="px-4 py-3 font-semibold text-green-700">{formatCurrency(Number(c.valor))}</td>
@@ -562,7 +640,7 @@ export default function ContasReceberPage() {
                         <button onClick={() => estornarRecebimento(c)} className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-500 transition-colors" title="Estornar recebimento"><RotateCcw size={14} /></button>
                       )}
                       <button onClick={() => abrirEditar(c)} className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500 transition-colors" title="Editar"><Pencil size={14} /></button>
-                      <button onClick={() => excluir(c.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors" title="Excluir"><Trash2 size={14} /></button>
+                      <button onClick={() => excluir(c)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors" title="Excluir"><Trash2 size={14} /></button>
                     </div>
                   </td>
                 </tr>
@@ -583,7 +661,7 @@ export default function ContasReceberPage() {
             return (
               <MobileCard key={c.id} className="py-4">
                 <div className="flex items-start justify-between gap-2 mb-2">
-                  <p className="font-bold text-slate-800 text-sm leading-tight flex-1 min-w-0">{c.descricao}{(c.anexos?.length ?? 0) > 0 && <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-indigo-500 align-middle"><Paperclip size={11} />{c.anexos!.length}</span>}</p>
+                  <button onClick={() => abrirDetalhe(c)} className="font-bold text-slate-800 text-sm leading-tight flex-1 min-w-0 text-left">{c.descricao}{(c.anexos?.length ?? 0) > 0 && <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-indigo-500 align-middle"><Paperclip size={11} />{c.anexos!.length}</span>}</button>
                   <Badge variant={statusVariant[c.status]}>{statusLabel[c.status]}</Badge>
                 </div>
                 <div className="flex items-center justify-between mb-2">
@@ -608,7 +686,7 @@ export default function ContasReceberPage() {
                     <button onClick={() => estornarRecebimento(c)} className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-amber-100 text-amber-700 rounded-xl text-xs font-semibold hover:bg-amber-200 transition-colors"><RotateCcw size={13} /> Estornar</button>
                   )}
                   <button onClick={() => abrirEditar(c)} className="flex items-center justify-center gap-1.5 px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-200 transition-colors"><Pencil size={13} /> Editar</button>
-                  <button onClick={() => excluir(c.id)} className="flex items-center justify-center p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 transition-colors"><Trash2 size={14} /></button>
+                  <button onClick={() => excluir(c)} className="flex items-center justify-center p-2 bg-red-50 text-red-400 rounded-xl hover:bg-red-100 transition-colors"><Trash2 size={14} /></button>
                 </div>
               </MobileCard>
             )
@@ -749,6 +827,110 @@ export default function ContasReceberPage() {
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setModalReceber(null)}>Cancelar</Button>
               <Button variant="success" onClick={registrarRecebimento} disabled={saving}><DollarSign size={14} /> Confirmar Recebimento</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Modal excluir parcela: todas ou so esta */}
+      <Modal open={!!excluirAlvo} onClose={() => setExcluirAlvo(null)} title="Excluir parcela" size="sm">
+        {excluirAlvo && (() => {
+          const total = irmasParcela(excluirAlvo).length
+          return (
+            <div className="space-y-4">
+              <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+                <p className="text-sm text-slate-700">
+                  <strong>{excluirAlvo.descricao}</strong> faz parte de um parcelamento de <strong>{total} parcelas</strong>.
+                </p>
+                <p className="text-xs text-slate-500 mt-1">O que voce deseja excluir?</p>
+              </div>
+              <div className="grid grid-cols-1 gap-2">
+                <button onClick={excluirTodasParcelas}
+                  className="flex items-center justify-between gap-2 px-4 py-3 rounded-xl border-2 border-red-200 bg-red-50 hover:bg-red-100 transition-colors text-left">
+                  <div>
+                    <p className="text-sm font-semibold text-red-700">Excluir TODAS as parcelas</p>
+                    <p className="text-xs text-red-500">Remove as {total} parcelas deste contrato</p>
+                  </div>
+                  <Trash2 size={18} className="text-red-500 flex-shrink-0" />
+                </button>
+                <button onClick={excluirSomenteEsta}
+                  className="flex items-center justify-between gap-2 px-4 py-3 rounded-xl border-2 border-slate-200 bg-white hover:bg-slate-50 transition-colors text-left">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-700">Excluir somente esta</p>
+                    <p className="text-xs text-slate-400">Mantem as outras parcelas</p>
+                  </div>
+                  <Trash2 size={18} className="text-slate-400 flex-shrink-0" />
+                </button>
+              </div>
+              <div className="flex justify-end pt-2 border-t border-slate-100">
+                <Button variant="secondary" size="sm" onClick={() => setExcluirAlvo(null)}>Cancelar</Button>
+              </div>
+            </div>
+          )
+        })()}
+      </Modal>
+
+      {/* Modal Detalhes do recebimento */}
+      <Modal open={!!detalhe} onClose={() => setDetalhe(null)} title="Detalhes do recebimento" size="sm">
+        {detalhe && (
+          <div className="space-y-4">
+            <div className="bg-slate-50 rounded-xl p-4">
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-semibold text-slate-800">{detalhe.descricao}</p>
+                <Badge variant={statusVariant[detalhe.status]}>{statusLabel[detalhe.status]}</Badge>
+              </div>
+              <p className="text-2xl font-bold text-green-700 mt-1">{formatCurrency(Number(detalhe.valor))}</p>
+              {(detalhe.tag_ids ?? []).length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {(detalhe.tag_ids ?? []).map(id => { const t = tagById(id); return t ? (
+                    <span key={id} className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold text-white" style={{ background: t.cor }}>{t.nome}</span>
+                  ) : null })}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between"><span className="text-slate-500">Previsao</span><span className="text-slate-800 font-medium">{formatDate(detalhe.data_vencimento)}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Categoria</span><span className="text-slate-800 font-medium">{(detalhe as any).categorias?.nome ?? '—'}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Contrato / Centro</span><span className="text-slate-800 font-medium">{(detalhe as any).centros_custo?.nome ?? '—'}</span></div>
+            </div>
+
+            {/* Bloco de recebimento (so quando recebido) */}
+            {detalhe.status === 'recebido' && (
+              <div className="bg-green-50 border border-green-100 rounded-xl p-3 space-y-2 text-sm">
+                <p className="text-xs font-semibold text-green-700 uppercase">Recebimento</p>
+                <div className="flex justify-between"><span className="text-slate-500">Recebido em</span><span className="text-slate-800 font-medium">{detalhe.data_recebimento ? formatDate(detalhe.data_recebimento) : (detalheLanc?.data ? formatDate(detalheLanc.data) : '—')}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Banco</span><span className="text-slate-800 font-medium">{detalheLanc?.conta ?? 'Sem banco informado'}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Forma</span><span className="text-slate-800 font-medium">{detalheLanc?.forma ? (formaLabel[detalheLanc.forma] ?? detalheLanc.forma) : '—'}</span></div>
+                {detalheLanc?.valor != null && detalheLanc.valor !== Number(detalhe.valor) && (
+                  <div className="flex justify-between"><span className="text-slate-500">Valor recebido</span><span className="text-slate-800 font-medium">{formatCurrency(detalheLanc.valor)}</span></div>
+                )}
+              </div>
+            )}
+
+            {detalhe.observacoes && (
+              <div>
+                <p className="text-xs font-medium text-slate-500 mb-1">Observacoes</p>
+                <p className="text-sm text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-2.5">{detalhe.observacoes}</p>
+              </div>
+            )}
+
+            {/* Comprovantes (anexos) — ver, adicionar e remover direto no detalhe */}
+            <div>
+              <p className="text-xs font-medium text-slate-500 mb-1.5">Comprovantes (anexos)</p>
+              <AnexosManager
+                table="contas_receber"
+                rowId={detalhe.id}
+                anexos={detalhe.anexos ?? []}
+                onChanged={a => { setDetalhe({ ...detalhe, anexos: a }); load() }}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              {(detalhe.status === 'pendente' || detalhe.status === 'vencido') && (
+                <Button size="sm" variant="success" onClick={() => { const c = detalhe; setDetalhe(null); setModalReceber(c); setDataRecebimento(format(new Date(), 'yyyy-MM-dd')); setRecContaId(''); setRecForma('pix') }}><CheckCircle size={14} /> Dar baixa</Button>
+              )}
+              <Button size="sm" onClick={() => { const c = detalhe; setDetalhe(null); abrirEditar(c) }}><Pencil size={14} /> Editar</Button>
             </div>
           </div>
         )}
