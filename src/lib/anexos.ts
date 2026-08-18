@@ -4,8 +4,11 @@ import type { Anexo } from '@/lib/types'
 export const MAX_ANEXO = 2 * 1024 * 1024 // 2 MB por arquivo
 const BUCKET = 'comprovantes'
 
-export function anexoUrl(path: string): string {
-  return supabase.storage.from(BUCKET).getPublicUrl(path).data.publicUrl
+// Bucket e privado: gera uma URL assinada temporaria (expira em 1h por padrao).
+export async function anexoUrlAssinada(path: string, expiraSeg = 3600): Promise<string | null> {
+  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(path, expiraSeg)
+  if (error) return null
+  return data?.signedUrl ?? null
 }
 
 function buildPath(table: string, rowId: string, fileName: string): string {

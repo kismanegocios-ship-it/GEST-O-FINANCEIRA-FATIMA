@@ -24,7 +24,7 @@ import { useEmpresa } from '@/lib/empresa'
 import { useTags } from '@/lib/use-tags'
 import type { Tag, Anexo } from '@/lib/types'
 import { AnexosManager } from '@/components/anexos'
-import { subirAnexos, anexoUrl } from '@/lib/anexos'
+import { subirAnexos, anexoUrlAssinada } from '@/lib/anexos'
 
 // Quantos meses a frente as contas recorrentes sao provisionadas
 const HORIZONTE_MESES = 12
@@ -95,6 +95,7 @@ export default function DespesasPage() {
   const [perIni, setPerIni] = useState('')
   const [perFim, setPerFim] = useState('')
   const [modalPagar, setModalPagar] = useState<Despesa | null>(null)
+  const [anexoUrls, setAnexoUrls] = useState<Record<string, string>>({})
   const [dataPagamento, setDataPagamento] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [pagContaId, setPagContaId] = useState('')
   const [pagForma, setPagForma] = useState('pix')
@@ -252,6 +253,19 @@ export default function DespesasPage() {
   }, [empresaId, empLoading])
 
   useEffect(() => { load() }, [load])
+
+  // Gera URLs assinadas (bucket privado) pros comprovantes do modal de pagar
+  useEffect(() => {
+    let ativo = true
+    const carregar = async () => {
+      const anexos = modalPagar?.anexos ?? []
+      if (anexos.length === 0) { setAnexoUrls({}); return }
+      const pares = await Promise.all(anexos.map(async a => [a.path, await anexoUrlAssinada(a.path)] as const))
+      if (ativo) setAnexoUrls(Object.fromEntries(pares.filter(([, u]) => u) as [string, string][]))
+    }
+    carregar()
+    return () => { ativo = false }
+  }, [modalPagar])
 
   const setPeriodo = (ini: Date, fim: Date) => {
     setPerIni(format(ini, 'yyyy-MM-dd'))
@@ -1257,18 +1271,21 @@ export default function DespesasPage() {
                 <div className="grid grid-cols-3 gap-2">
                   {modalPagar.anexos!.map(a => {
                     const isPdf = /\.pdf$/i.test(a.nome)
-                    const url = anexoUrl(a.path)
+                    const url = anexoUrls[a.path]
                     return (
-                      <a key={a.path} href={url} target="_blank" rel="noopener noreferrer"
+                      <a key={a.path} href={url ?? undefined} target="_blank" rel="noopener noreferrer"
+                        onClick={e => { if (!url) e.preventDefault() }}
                         className="group block rounded-lg border border-slate-200 overflow-hidden hover:border-indigo-400 transition-all" title={a.nome}>
                         {isPdf ? (
                           <div className="h-20 flex flex-col items-center justify-center bg-slate-50 text-slate-500">
                             <Paperclip size={16} />
                             <span className="text-[9px] mt-1 font-semibold">PDF</span>
                           </div>
-                        ) : (
+                        ) : url ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={url} alt={a.nome} className="h-20 w-full object-cover" />
+                        ) : (
+                          <div className="h-20 flex items-center justify-center bg-slate-50 text-slate-400 text-[9px]">carregando...</div>
                         )}
                         <p className="text-[9px] text-slate-500 truncate px-1.5 py-1 group-hover:text-indigo-600">{a.nome}</p>
                       </a>

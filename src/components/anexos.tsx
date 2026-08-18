@@ -4,7 +4,7 @@ import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Paperclip, X, Loader2, Plus } from 'lucide-react'
 import type { Anexo } from '@/lib/types'
-import { subirAnexos, removerAnexo, anexoUrl, MAX_ANEXO } from '@/lib/anexos'
+import { subirAnexos, removerAnexo, anexoUrlAssinada, MAX_ANEXO } from '@/lib/anexos'
 
 interface Props {
   table: 'despesas' | 'contas_receber'
@@ -39,6 +39,12 @@ export function AnexosManager({ table, rowId, anexos, onChanged, staged = [], on
     }
   }
 
+  const abrir = async (a: Anexo) => {
+    const url = await anexoUrlAssinada(a.path)
+    if (url) window.open(url, '_blank', 'noopener,noreferrer')
+    else toast.error('Nao foi possivel abrir o anexo')
+  }
+
   const remove = async (a: Anexo) => {
     if (!rowId) return
     if (!confirm(`Remover "${a.nome}"?`)) return
@@ -61,7 +67,7 @@ export function AnexosManager({ table, rowId, anexos, onChanged, staged = [], on
                 <Paperclip size={13} className="text-indigo-500 flex-shrink-0" /><span className="truncate">{a.nome}</span>
               </span>
               <div className="flex items-center gap-1 flex-shrink-0">
-                <a href={anexoUrl(a.path)} target="_blank" rel="noopener noreferrer" className="px-2 py-1 rounded-lg text-xs font-medium text-indigo-600 hover:bg-indigo-50">Ver</a>
+                <button type="button" onClick={() => abrir(a)} className="px-2 py-1 rounded-lg text-xs font-medium text-indigo-600 hover:bg-indigo-50">Ver</button>
                 <button type="button" onClick={() => remove(a)} className="px-2 py-1 rounded-lg text-xs font-medium text-amber-600 hover:bg-amber-50">Remover</button>
               </div>
             </div>

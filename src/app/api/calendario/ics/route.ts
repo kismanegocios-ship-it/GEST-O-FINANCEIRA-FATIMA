@@ -5,8 +5,18 @@ function formatCurrencySimple(v: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v)
 }
 
-export async function GET() {
-  // Usa service_role para bypassar RLS (endpoint server-side, seguro)
+export async function GET(request: Request) {
+  // Seguranca: este endpoint e publico (o Google Agenda busca sem login),
+  // entao exige um token secreto na URL. Sem token configurado, fica desativado.
+  const url = new URL(request.url)
+  const token = url.searchParams.get('token')
+  const empresaId = url.searchParams.get('empresa')
+  const esperado = process.env.NEXT_PUBLIC_CALENDAR_TOKEN
+  if (!esperado || token !== esperado) {
+    return new NextResponse('Nao autorizado', { status: 401 })
+  }
+
+  // Usa service_role para bypassar RLS (endpoint server-side, ja protegido por token)
   // Fallback para anon se service_role nao estiver configurado
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -17,13 +27,16 @@ export async function GET() {
   const tresM = new Date(hoje)
   tresM.setMonth(tresM.getMonth() + 3)
 
-  const { data: despesas } = await supabase
+  let query = supabase
     .from('despesas')
     .select('*, categorias(nome), centros_custo(nome)')
     .in('status', ['pendente', 'vencido'])
     .gte('data_vencimento', hoje.toISOString().slice(0, 10))
     .lte('data_vencimento', tresM.toISOString().slice(0, 10))
     .order('data_vencimento')
+  // Filtra pela empresa informada na URL (isolamento por empresa)
+  if (empresaId) query = query.eq('empresa_id', empresaId)
+  const { data: despesas } = await query
 
   const linhas = [
     'BEGIN:VCALENDAR',
@@ -84,7 +97,7 @@ export async function GET() {
   return new NextResponse(ics, {
     headers: {
       'Content-Type': 'text/calendar; charset=utf-8',
-      'Cache-Control': 'public, max-age=3600',
+      'Cache-Control': 'private, max-age=3600',
       'Content-Disposition': 'inline; filename="vencimentos-fatima.ics"',
     },
   })

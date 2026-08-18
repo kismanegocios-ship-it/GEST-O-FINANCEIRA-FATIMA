@@ -203,7 +203,11 @@ export default function CalendarioPage() {
   }
 
   const copiarSubscribeUrl = () => {
-    const url = `${baseUrl}/api/calendario/ics`
+    const token = process.env.NEXT_PUBLIC_CALENDAR_TOKEN
+    if (!token) { toast.error('Configure NEXT_PUBLIC_CALENDAR_TOKEN no Vercel para liberar a Subscribe URL'); return }
+    const params = new URLSearchParams({ token })
+    if (empresaId) params.set('empresa', empresaId)
+    const url = `${baseUrl}/api/calendario/ics?${params.toString()}`
     navigator.clipboard.writeText(url)
     toast.success('URL copiada! Cole no Google Agenda > Outros calendarios > Por URL')
   }
